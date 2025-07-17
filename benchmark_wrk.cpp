@@ -77,6 +77,8 @@ private:
     std::vector<AggregatedResult> results;
     
     static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+        (void)contents;  // Suppress unused parameter warning
+        (void)userp;     // Suppress unused parameter warning
         return size * nmemb;
     }
     

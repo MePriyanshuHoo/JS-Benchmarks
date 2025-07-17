@@ -40,13 +40,21 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libcurl4-openssl-dev pkg-config bc
+          sudo apt-get install -y build-essential libcurl4-openssl-dev pkg-config bc curl
+          # Verify installations
+          gcc --version
+          g++ --version
+          pkg-config --version
           echo "✅ Ubuntu system dependencies installed"
 
       - name: 🔧 Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install curl bc
+          brew install curl bc pkg-config || true
+          # Verify installations
+          gcc --version || echo "GCC not available, using clang"
+          clang++ --version
+          pkg-config --version
           echo "✅ macOS system dependencies installed"
 
       - name: ⚡ Install WRK (Ubuntu)
@@ -58,6 +66,9 @@ jobs:
           make
           sudo cp wrk /usr/local/bin/
           rm -rf /tmp/wrk
+          # Verify WRK installation
+          wrk --version || echo "WRK version check"
+          which wrk
           echo "✅ WRK installed on Ubuntu"
 
       - name: ⚡ Install WRK (macOS)
@@ -65,20 +76,25 @@ jobs:
         run: |
           echo "Installing WRK on macOS..."
           brew install wrk
+          # Verify WRK installation
+          wrk --version || echo "WRK version check"
+          which wrk
           echo "✅ WRK installed on macOS"
 
       - name: 🔍 Verify system tools
         run: |
           echo "=== System Verification ==="
           echo "OS: ${{ matrix.os }}"
-          echo "GCC: $(gcc --version | head -1)"
-          echo "G++: $(g++ --version | head -1)"
+          echo "GCC: $(gcc --version 2>/dev/null | head -1 || echo 'GCC not available')"
+          echo "G++: $(g++ --version 2>/dev/null | head -1 || echo 'G++ not available')"
+          echo "Clang++: $(clang++ --version 2>/dev/null | head -1 || echo 'Clang++ not available')"
           echo "Make: $(make --version | head -1)"
           echo "Curl: $(curl --version | head -1)"
           echo "WRK: $(wrk --version 2>&1 | head -1)"
           echo "Node.js: $(node --version)"
           echo "Bun: $(bun --version || echo 'Bun not available')"
-          echo "BC: $(bc --version | head -1)"
+          echo "BC: $(bc --version 2>/dev/null | head -1 || echo 'BC not available')"
+          echo "PKG-CONFIG: $(pkg-config --version)"
 
       - name: 📦 Install framework dependencies
         run: |
@@ -105,20 +121,36 @@ jobs:
           fi
           echo "✅ C++ source file found"
 
-          # Test dependency check
+          # Test dependency check (don't fail on this)
           make check-deps || echo "⚠️ Some dependencies missing but continuing"
 
-          # Clean and build
-          make clean
-          make
+          # Clean and build with better error handling
+          make clean || true
+          echo "Attempting compilation..."
+
+          # Try different compiler approaches
+          if command -v g++ >/dev/null 2>&1; then
+            echo "Using g++ compiler"
+            make CXX=g++
+          elif command -v clang++ >/dev/null 2>&1; then
+            echo "Using clang++ compiler"
+            make CXX=clang++
+          else
+            echo "❌ No suitable C++ compiler found"
+            exit 1
+          fi
 
           # Verify binary was created
           if [ -f "bin/benchmark_wrk" ]; then
             echo "✅ C++ benchmark compiled successfully"
             ls -la bin/benchmark_wrk
-            file bin/benchmark_wrk
+            file bin/benchmark_wrk || echo "file command not available"
           else
             echo "❌ C++ compilation failed - no binary produced"
+            echo "Build directory contents:"
+            ls -la build/ || echo "No build directory"
+            echo "Root directory contents:"
+            ls -la
             exit 1
           fi
 
@@ -127,41 +159,50 @@ jobs:
           echo "Testing framework server startup..."
 
           # Test Express server
-          timeout 10s node express_server.js &
+          echo "Starting Express server..."
+          node express_server.js &
           EXPRESS_PID=$!
           sleep 3
           if curl -f http://localhost:3000 >/dev/null 2>&1; then
             echo "✅ Express server OK"
           else
             echo "❌ Express server failed"
+            echo "Checking if process is running:"
+            ps aux | grep express_server || true
             kill $EXPRESS_PID 2>/dev/null || true
             exit 1
           fi
           kill $EXPRESS_PID 2>/dev/null || true
-          sleep 1
+          sleep 2
 
           # Test Fastify server
-          timeout 10s node fastify_server.js &
+          echo "Starting Fastify server..."
+          node fastify_server.js &
           FASTIFY_PID=$!
           sleep 3
           if curl -f http://localhost:3001 >/dev/null 2>&1; then
             echo "✅ Fastify server OK"
           else
             echo "❌ Fastify server failed"
+            echo "Checking if process is running:"
+            ps aux | grep fastify_server || true
             kill $FASTIFY_PID 2>/dev/null || true
             exit 1
           fi
           kill $FASTIFY_PID 2>/dev/null || true
-          sleep 1
+          sleep 2
 
           # Test Hono server
-          timeout 10s node hono_server.js &
+          echo "Starting Hono server..."
+          node hono_server.js &
           HONO_PID=$!
           sleep 3
           if curl -f http://localhost:3002 >/dev/null 2>&1; then
             echo "✅ Hono server OK"
           else
             echo "❌ Hono server failed"
+            echo "Checking if process is running:"
+            ps aux | grep hono_server || true
             kill $HONO_PID 2>/dev/null || true
             exit 1
           fi

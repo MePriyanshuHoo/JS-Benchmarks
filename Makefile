@@ -1,7 +1,7 @@
 # Makefile for Framework Benchmark C++ Implementation
 
-# Compiler and flags
-CXX = g++
+# Compiler and flags with fallback detection
+CXX ?= $(shell command -v g++ 2>/dev/null || command -v clang++ 2>/dev/null || echo "g++")
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -pthread
 LDFLAGS = -lcurl
 
@@ -28,11 +28,14 @@ $(BIN_DIR):
 
 # Compile object files
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+	@echo "Compiling $<..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Link executable
 $(TARGET): $(OBJECTS) | $(BIN_DIR)
+	@echo "Linking $(TARGET)..."
 	$(CXX) $(OBJECTS) $(LDFLAGS) -o $@
+	@echo "✅ Build completed successfully: $(TARGET)"
 
 # Install dependencies (macOS with Homebrew)
 .PHONY: install-deps
@@ -65,9 +68,40 @@ install-deps-ubuntu:
 .PHONY: check-deps
 check-deps:
 	@echo "Checking dependencies..."
-	@command -v $(CXX) >/dev/null 2>&1 || (echo "Error: $(CXX) not found" && exit 1)
-	@pkg-config --exists libcurl || (echo "Error: libcurl not found" && exit 1)
-	@command -v wrk >/dev/null 2>&1 || (echo "Error: wrk not found" && exit 1)
+	@if ! command -v $(CXX) >/dev/null 2>&1; then \
+		echo "Warning: $(CXX) not found, trying alternatives..."; \
+		if command -v g++ >/dev/null 2>&1; then \
+			echo "Found g++, will use that"; \
+		elif command -v clang++ >/dev/null 2>&1; then \
+			echo "Found clang++, will use that"; \
+		else \
+			echo "Error: No C++ compiler found (tried g++, clang++)"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "✅ C++ compiler: $(CXX)"; \
+	fi
+	@if pkg-config --exists libcurl 2>/dev/null; then \
+		echo "✅ libcurl found"; \
+	else \
+		echo "Warning: libcurl not found via pkg-config, trying manual detection..."; \
+		if [ -f "/usr/include/curl/curl.h" ] || [ -f "/opt/homebrew/include/curl/curl.h" ] || [ -f "/usr/local/include/curl/curl.h" ]; then \
+			echo "✅ libcurl headers found manually"; \
+		else \
+			echo "Error: libcurl development headers not found"; \
+			echo "Ubuntu/Debian: sudo apt-get install libcurl4-openssl-dev"; \
+			echo "macOS: brew install curl"; \
+			exit 1; \
+		fi; \
+	fi
+	@if command -v wrk >/dev/null 2>&1; then \
+		echo "✅ WRK found: $$(wrk --version 2>&1 | head -1)"; \
+	else \
+		echo "Error: wrk not found"; \
+		echo "Ubuntu: sudo apt install wrk or compile from source"; \
+		echo "macOS: brew install wrk"; \
+		exit 1; \
+	fi
 	@echo "All dependencies satisfied!"
 
 # Build and run
@@ -100,7 +134,10 @@ release: $(TARGET)
 # Test compilation without running
 .PHONY: test-compile
 test-compile: $(TARGET)
-	@echo "Compilation successful!"
+	@echo "✅ Compilation successful!"
+	@echo "Binary info:"
+	@ls -la $(TARGET)
+	@if command -v file >/dev/null 2>&1; then file $(TARGET); fi
 
 # Setup development environment
 .PHONY: setup
@@ -128,12 +165,20 @@ help:
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
     CXXFLAGS += -DLINUX
+    # Linux-specific library paths
+    LDFLAGS += -L/usr/lib -L/usr/local/lib
+    CXXFLAGS += -I/usr/include -I/usr/local/include
 endif
 ifeq ($(UNAME_S),Darwin)
     CXXFLAGS += -DMACOS
-    # macOS specific flags if needed
-    LDFLAGS += -L/opt/homebrew/lib
-    CXXFLAGS += -I/opt/homebrew/include
+    # macOS specific flags - try multiple homebrew locations
+    LDFLAGS += -L/opt/homebrew/lib -L/usr/local/lib
+    CXXFLAGS += -I/opt/homebrew/include -I/usr/local/include
+    # Prefer homebrew curl if available
+    ifneq ($(wildcard /opt/homebrew/include/curl),)
+        CXXFLAGS += -I/opt/homebrew/include
+        LDFLAGS += -L/opt/homebrew/lib
+    endif
 endif
 
 # Print variables for debugging
