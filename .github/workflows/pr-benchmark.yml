@@ -61,7 +61,7 @@ jobs:
 
     - name: 📦 Install framework dependencies
       run: |
-        npm ci
+        npm install
         bun install --frozen-lockfile
         echo "✅ Framework dependencies installed"
 
