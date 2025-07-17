@@ -18,23 +18,11 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        node-version: [20, 22]
       fail-fast: false
 
     steps:
       - name: 🛒 Checkout repository
         uses: actions/checkout@v4
-
-      - name: 📋 Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: "npm"
-
-      - name: 🟡 Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
 
       - name: 🔧 Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -394,7 +382,6 @@ jobs:
             "express_server.js"
             "fastify_server.js"
             "hono_server.js"
-            "package.json"
           )
 
           for file in "${required_files[@]}"; do
@@ -416,11 +403,12 @@ jobs:
             fi
           done
 
-          # Check package.json has C++ related scripts
-          if grep -q "make" package.json; then
-            echo "✅ package.json has C++ build integration"
+          # Check C++ build system
+          if [ -f "Makefile" ]; then
+            echo "✅ C++ build system (Makefile) is present"
           else
-            echo "⚠️ package.json may not be updated for C++ implementation"
+            echo "❌ C++ build system (Makefile) missing"
+            exit 1
           fi
 
           echo "✅ Project structure validation completed"
@@ -446,25 +434,12 @@ jobs:
       - name: 🛒 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 📋 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - name: 🟡 Setup Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: latest
-
       - name: 🔧 Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libcurl4-openssl-dev pkg-config bc
           git clone https://github.com/wg/wrk.git /tmp/wrk
           cd /tmp/wrk && make && sudo cp wrk /usr/local/bin/
-          npm install
-          bun install --frozen-lockfile
 
       - name: 🏃‍♂️ Performance smoke test
         run: |
