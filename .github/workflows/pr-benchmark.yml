@@ -55,6 +55,7 @@ jobs:
         cd /tmp/wrk
         make
         sudo cp wrk /usr/local/bin/
+        cd $GITHUB_WORKSPACE
         rm -rf /tmp/wrk
         wrk --version || echo "WRK installed"
         echo "✅ WRK installed"
