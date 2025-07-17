@@ -55,6 +55,7 @@ jobs:
         cd /tmp/wrk
         make
         sudo cp wrk /usr/local/bin/
+        cd $GITHUB_WORKSPACE
         rm -rf /tmp/wrk
         wrk --version || echo "WRK installed"
         echo "✅ WRK installed"
@@ -100,17 +101,34 @@ jobs:
         # Create PR-optimized version
         cp benchmark_wrk.cpp benchmark_wrk_pr.cpp
 
-        # Modify config for faster PR testing
-        sed -i 's/connections = 100/connections = 50/' benchmark_wrk_pr.cpp
-        sed -i 's/duration = "30s"/duration = "10s"/' benchmark_wrk_pr.cpp
-        sed -i 's/runs = 3/runs = 1/' benchmark_wrk_pr.cpp
-        sed -i 's/warmupTime = 3000/warmupTime = 2000/' benchmark_wrk_pr.cpp
-        sed -i 's/cooldownTime = 2000/cooldownTime = 1000/' benchmark_wrk_pr.cpp
+        # Modify config for faster PR testing (cross-platform sed)
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+          # macOS
+          sed -i '' 's/connections = 100/connections = 50/' benchmark_wrk_pr.cpp
+          sed -i '' 's/duration = "30s"/duration = "10s"/' benchmark_wrk_pr.cpp
+          sed -i '' 's/runs = 3/runs = 1/' benchmark_wrk_pr.cpp
+          sed -i '' 's/warmupTime = 3000/warmupTime = 2000/' benchmark_wrk_pr.cpp
+          sed -i '' 's/cooldownTime = 2000/cooldownTime = 1000/' benchmark_wrk_pr.cpp
+        else
+          # Linux
+          sed -i 's/connections = 100/connections = 50/' benchmark_wrk_pr.cpp
+          sed -i 's/duration = "30s"/duration = "10s"/' benchmark_wrk_pr.cpp
+          sed -i 's/runs = 3/runs = 1/' benchmark_wrk_pr.cpp
+          sed -i 's/warmupTime = 3000/warmupTime = 2000/' benchmark_wrk_pr.cpp
+          sed -i 's/cooldownTime = 2000/cooldownTime = 1000/' benchmark_wrk_pr.cpp
+        fi
 
         # For light benchmark, make it even faster
         if [ "${{ steps.changes.outputs.benchmark_type }}" == "light" ]; then
-          sed -i 's/connections = 50/connections = 25/' benchmark_wrk_pr.cpp
-          sed -i 's/duration = "10s"/duration = "5s"/' benchmark_wrk_pr.cpp
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS
+            sed -i '' 's/connections = 50/connections = 25/' benchmark_wrk_pr.cpp
+            sed -i '' 's/duration = "10s"/duration = "5s"/' benchmark_wrk_pr.cpp
+          else
+            # Linux
+            sed -i 's/connections = 50/connections = 25/' benchmark_wrk_pr.cpp
+            sed -i 's/duration = "10s"/duration = "5s"/' benchmark_wrk_pr.cpp
+          fi
         fi
 
         # Compile PR version
