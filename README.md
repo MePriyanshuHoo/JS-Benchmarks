@@ -9,6 +9,9 @@ Performance comparison of Express.js, Fastify, and Hono across Node.js and Bun r
 ![Benchmark](https://img.shields.io/badge/Benchmark-Automated-blue?style=flat)
 ![Last Updated](https://img.shields.io/badge/Last%20Updated-2025-07-17-green?style=flat)
 
+[![Monthly Benchmark](https://github.com/MePriyanshuHoo/JS-Benchmarks/actions/workflows/monthly-benchmark.yml/badge.svg)](https://github.com/MePriyanshuHoo/JS-Benchmarks/actions/workflows/monthly-benchmark.yml)
+[![PR Benchmark](https://github.com/MePriyanshuHoo/JS-Benchmarks/actions/workflows/pr-benchmark.yml/badge.svg)](https://github.com/MePriyanshuHoo/JS-Benchmarks/actions/workflows/pr-benchmark.yml)
+
 ## 📊 Quick Results
 
 **🏆 Performance Leader:** Fastify on bun - **84,845.87 req/sec**
