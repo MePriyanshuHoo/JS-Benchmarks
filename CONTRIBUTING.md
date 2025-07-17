@@ -1,422 +1,636 @@
 # Contributing to Framework Benchmark
 
-Thank you for your interest in contributing to the Framework Benchmark project! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to the Framework Benchmark project! This guide will help you get started with contributing to our high-performance C++ benchmarking suite.
 
 ## 📋 Table of Contents
 
+- [Code of Conduct](#code-of-conduct)
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
-- [Adding New Frameworks](#adding-new-frameworks)
-- [Improving Benchmarks](#improving-benchmarks)
-- [Code Style Guidelines](#code-style-guidelines)
+- [Project Structure](#project-structure)
+- [Making Changes](#making-changes)
 - [Testing](#testing)
-- [Automated Systems](#automated-systems)
-- [Pull Request Process](#pull-request-process)
-- [Release Process](#release-process)
+- [Submitting Changes](#submitting-changes)
+- [Adding New Frameworks](#adding-new-frameworks)
+- [Performance Guidelines](#performance-guidelines)
+- [Documentation](#documentation)
+- [Community](#community)
+
+## Code of Conduct
+
+This project adheres to a code of conduct that we expect all contributors to follow. Please be respectful, inclusive, and professional in all interactions.
 
 ## Getting Started
 
 ### Prerequisites
 
-- **Node.js** (v20 or higher)
-- **Bun** (latest version)
-- **Git**
-- **Basic understanding** of JavaScript and web frameworks
+Before contributing, ensure you have the following installed:
 
-### Development Setup
+**macOS:**
+```bash
+# Install Xcode Command Line Tools
+xcode-select --install
 
-1. **Fork and Clone**
+# Install Homebrew dependencies
+brew install curl wrk pkg-config node
+
+# Install Bun
+curl -fsSL https://bun.sh/install | bash
+```
+
+**Ubuntu/Debian:**
+```bash
+# Install build tools
+sudo apt-get update
+sudo apt-get install -y build-essential libcurl4-openssl-dev pkg-config
+
+# Install Node.js (via NodeSource)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Install WRK
+git clone https://github.com/wg/wrk.git /tmp/wrk
+cd /tmp/wrk && make && sudo cp wrk /usr/local/bin/
+
+# Install Bun
+curl -fsSL https://bun.sh/install | bash
+```
+
+### Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/framework-benchmark.git
+cd framework-benchmark
+
+# Install JavaScript dependencies
+npm install
+bun install
+
+# Verify system dependencies
+make check-deps
+
+# Build and test
+make clean && make && ./bin/benchmark_wrk
+```
+
+## Development Setup
+
+### Environment Setup
+
+1. **Fork the repository** on GitHub
+2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/your-username/framework-benchmark.git
+   git clone https://github.com/YOUR_USERNAME/framework-benchmark.git
    cd framework-benchmark
    ```
 
-2. **Install Dependencies**
+3. **Add upstream remote**:
    ```bash
-   npm install
-   bun install
+   git remote add upstream https://github.com/original-org/framework-benchmark.git
    ```
 
-3. **Verify Setup**
+4. **Install dependencies**:
    ```bash
-   npm run test:servers
-   npm run benchmark:full
+   make install-deps  # macOS
+   # or
+   make install-deps-ubuntu  # Ubuntu
    ```
 
-4. **Run Development Benchmark**
+### IDE Configuration
+
+**Visual Studio Code:**
+```json
+// .vscode/settings.json
+{
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/**",
+    "/opt/homebrew/include",
+    "/usr/include"
+  ],
+  "files.associations": {
+    "*.cpp": "cpp",
+    "*.h": "cpp"
+  }
+}
+```
+
+**CLion/IntelliJ:**
+- Set C++ standard to C++17
+- Configure CMake if needed
+- Add include paths for system libraries
+
+## Project Structure
+
+```
+framework-benchmark/
+├── benchmark_wrk.cpp          # Main C++ benchmark implementation
+├── Makefile                   # Build system
+├── package.json               # Node.js dependencies
+├── express_server.js          # Express framework server
+├── fastify_server.js          # Fastify framework server
+├── hono_server.js             # Hono framework server
+├── .github/workflows/         # CI/CD workflows
+│   ├── monthly-benchmark.yml
+│   ├── pr-benchmark.yml
+│   └── test-setup.yml
+└── README.md                  # Project documentation
+```
+
+## Making Changes
+
+### Branching Strategy
+
+- `main` - Production-ready code
+- `feature/description` - New features
+- `fix/description` - Bug fixes
+- `perf/description` - Performance improvements
+- `docs/description` - Documentation updates
+
+### Code Standards
+
+#### C++ Guidelines
+
+**Style:**
+```cpp
+// Use descriptive names
+class BenchmarkOrchestrator {
+private:
+    BenchmarkConfig config;
+    std::vector<Setup> setups;
+    
+public:
+    // Clear, documented methods
+    bool runBenchmark(const Setup& setup);
+    void generateReport(const std::vector<Result>& results);
+};
+
+// Use const correctness
+const std::string& getName() const { return name; }
+
+// RAII for resource management
+class ServerManager {
+    pid_t serverPid;
+public:
+    ServerManager(const Setup& setup) : serverPid(startServer(setup)) {}
+    ~ServerManager() { stopServer(serverPid); }
+};
+```
+
+**Formatting:**
+- 4 spaces for indentation
+- Opening braces on same line
+- Clear variable and function names
+- Comments for complex algorithms
+
+**Error Handling:**
+```cpp
+// Use exceptions for exceptional cases
+if (!serverReady) {
+    throw std::runtime_error("Server failed to start on port " + std::to_string(port));
+}
+
+// Use return codes for expected failures
+bool checkServerHealth(int port) {
+    // Returns false on failure, not exception
+    return healthy;
+}
+```
+
+#### JavaScript Guidelines
+
+For framework servers, follow these patterns:
+
+**Express:**
+```javascript
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.json({ message: 'Hello from Express!', timestamp: Date.now() });
+});
+
+app.listen(3000, '0.0.0.0', () => {
+  console.log('Express server listening on port 3000');
+});
+```
+
+**Error Handling:**
+```javascript
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Shutting down gracefully');
+  server.close(() => process.exit(0));
+});
+```
+
+### Build System Guidelines
+
+**Makefile Best Practices:**
+- Use `.PHONY` for non-file targets
+- Provide help target
+- Support both debug and release builds
+- Handle cross-platform differences
+
+```makefile
+.PHONY: all clean help
+
+# Default target
+all: $(TARGET)
+
+# Help target
+help:
+	@echo "Available targets:"
+	@echo "  all      - Build benchmark"
+	@echo "  clean    - Clean build files"
+	@echo "  debug    - Build with debug info"
+```
+
+## Testing
+
+### Running Tests
+
+**Quick Validation:**
+```bash
+# Test compilation
+make test-compile
+
+# Test individual components
+make clean && make debug
+./bin/benchmark_wrk
+
+# Test specific framework
+node express_server.js &
+curl http://localhost:3000
+pkill -f express_server.js
+```
+
+**Full Test Suite:**
+```bash
+# Run comprehensive tests
+make clean && make release && make run
+```
+
+### Adding Tests
+
+**Unit Testing (for new components):**
+```cpp
+// test_benchmark.cpp
+#include "benchmark_wrk.h"
+#include <cassert>
+
+void test_parseWrkOutput() {
+    std::string mockOutput = "Requests/sec: 12345.67\n";
+    BenchmarkResult result = parseWrkOutput(mockOutput);
+    assert(result.requestsPerSecond == 12345.67);
+}
+
+int main() {
+    test_parseWrkOutput();
+    std::cout << "All tests passed!" << std::endl;
+    return 0;
+}
+```
+
+**Integration Testing:**
+```bash
+# Create test configuration
+echo '{"connections": 10, "duration": "2s"}' > test_config.json
+
+# Run with test config
+./bin/benchmark_wrk --config test_config.json
+```
+
+### Performance Testing
+
+**Benchmark Validation:**
+- Ensure consistent results across runs
+- Verify no memory leaks
+- Test under different system loads
+- Validate statistical accuracy
+
+```bash
+# Memory leak testing (if available)
+valgrind --leak-check=full ./bin/benchmark_wrk
+
+# Performance profiling
+perf record ./bin/benchmark_wrk
+perf report
+```
+
+## Submitting Changes
+
+### Pull Request Process
+
+1. **Update your fork:**
    ```bash
-   npm run dev:benchmark
+   git fetch upstream
+   git checkout main
+   git merge upstream/main
    ```
+
+2. **Create feature branch:**
+   ```bash
+   git checkout -b feature/your-description
+   ```
+
+3. **Make changes and commit:**
+   ```bash
+   git add .
+   git commit -m "feat: add new framework support for Koa.js"
+   ```
+
+4. **Push and create PR:**
+   ```bash
+   git push origin feature/your-description
+   ```
+
+### Commit Message Format
+
+Use conventional commits:
+
+```
+type(scope): description
+
+[optional body]
+
+[optional footer]
+```
+
+**Types:**
+- `feat` - New features
+- `fix` - Bug fixes
+- `perf` - Performance improvements
+- `docs` - Documentation
+- `test` - Tests
+- `refactor` - Code refactoring
+- `style` - Code style changes
+- `ci` - CI/CD changes
+
+**Examples:**
+```
+feat(benchmark): add support for Deno runtime
+
+perf(wrk): optimize result parsing with regex caching
+
+fix(server): handle SIGTERM gracefully in Express server
+
+docs(readme): update installation instructions for Ubuntu 22.04
+```
+
+### PR Requirements
+
+**Before submitting:**
+- [ ] Code compiles without warnings
+- [ ] All tests pass
+- [ ] Performance impact assessed
+- [ ] Documentation updated
+- [ ] Commit messages follow convention
+- [ ] No unnecessary files included
+
+**PR Description Template:**
+```markdown
+## Description
+Brief description of changes
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Performance improvement
+- [ ] Documentation update
+
+## Testing
+- [ ] Tested locally
+- [ ] All CI checks pass
+- [ ] Performance impact verified
+
+## Performance Impact
+- Baseline: X req/sec
+- After changes: Y req/sec
+- Impact: +/- Z%
+
+## Checklist
+- [ ] Code follows style guidelines
+- [ ] Self-review completed
+- [ ] Comments added for complex code
+- [ ] Documentation updated
+```
 
 ## Adding New Frameworks
 
-### Step-by-Step Guide
+### Framework Integration Steps
 
-1. **Create Server Implementation**
-
-   Create a new file `{framework}_server.js` in the project root:
-
+1. **Create server file:**
    ```javascript
-   // Example: newframework_server.js
-   const newframework = require('newframework');
+   // newframework_server.js
+   const NewFramework = require('new-framework');
    
-   const app = newframework();
+   const app = new NewFramework();
    
    app.get('/', (req, res) => {
-     res.json({ message: 'Hello from NewFramework!' });
+     res.json({ 
+       message: 'Hello from NewFramework!', 
+       timestamp: Date.now() 
+     });
    });
    
-   app.listen(3003, () => {
-     console.log('NewFramework server running on port 3003');
+   app.listen(3003, '0.0.0.0', () => {
+     console.log('NewFramework server listening on port 3003');
    });
    ```
 
-2. **Update Benchmark Configuration**
-
-   Add your framework to `scripts/benchmark.js`:
-
-   ```javascript
-   this.frameworks = [
-     // ... existing frameworks
-     {
-       name: 'NewFramework',
-       script: 'newframework_server.js',
-       port: 3003,
-       endpoint: '/',
-       responseType: 'json'
-     }
-   ];
+2. **Update C++ configuration:**
+   ```cpp
+   // In benchmark_wrk.cpp constructor
+   setups = {
+       // ... existing frameworks
+       {"NewFramework on Node.js", 3003, "node", "newframework", "newframework_server.js"},
+       {"NewFramework on Bun", 3003, "bun", "newframework", "newframework_server.js"}
+   };
    ```
 
-3. **Add Package Scripts**
-
-   Update `package.json`:
-
+3. **Update package.json:**
    ```json
    {
+     "dependencies": {
+       "new-framework": "^1.0.0"
+     },
      "scripts": {
        "newframework:node": "node newframework_server.js",
        "newframework:bun": "bun newframework_server.js"
-     },
-     "dependencies": {
-       "newframework": "^1.0.0"
      }
    }
    ```
 
-4. **Test Your Implementation**
-
+4. **Test integration:**
    ```bash
-   npm run newframework:node
-   # In another terminal:
+   npm install
+   make clean && make
+   npm run newframework:node &
    curl http://localhost:3003
    ```
 
 ### Framework Requirements
 
-- **Consistent Response Format**: Use either JSON `{"message": "Hello from Framework!"}` or plain text
-- **Production Optimization**: Configure for production performance
-- **Minimal Middleware**: Avoid unnecessary middleware that could skew results
-- **Error Handling**: Implement basic error handling
-- **Clean Shutdown**: Support graceful shutdown
+**Server Implementation:**
+- Listen on specified port with `0.0.0.0` binding
+- Return JSON response with consistent structure
+- Handle graceful shutdown (SIGTERM)
+- No additional middleware that affects performance
+- Production-ready configuration
 
-### Framework Guidelines
-
-- **Port Assignment**: Use the next available port (check existing frameworks)
-- **Logging**: Disable or minimize logging in production mode
-- **Process Title**: Set meaningful process title for easy identification
-- **Environment Variables**: Respect `NODE_ENV` and `PORT` environment variables
-
-## Improving Benchmarks
-
-### Benchmark Enhancements
-
-1. **New Metrics**
-   
-   Add metrics to `BenchmarkRunner.calculateStats()`:
-
-   ```javascript
-   // Example: Memory usage tracking
-   const memoryUsage = process.memoryUsage();
-   stats.memory = {
-     heapUsed: memoryUsage.heapUsed,
-     heapTotal: memoryUsage.heapTotal,
-     external: memoryUsage.external
-   };
-   ```
-
-2. **Test Scenarios**
-
-   Create specialized benchmark scenarios:
-
-   ```javascript
-   // scripts/benchmark-scenarios.js
-   class ScenarioBenchmark extends BenchmarkRunner {
-     async runFileUploadTest() {
-       // Implementation for file upload performance
-     }
-     
-     async runDatabaseLoadTest() {
-       // Implementation for database-heavy scenarios
-     }
-   }
-   ```
-
-3. **Platform Support**
-
-   Add support for different platforms:
-
-   ```javascript
-   async getSystemInfo() {
-     // Add Windows, Linux-specific optimizations
-     if (process.platform === 'win32') {
-       // Windows-specific system info
-     }
-   }
-   ```
-
-### Performance Analysis
-
-- **Statistical Accuracy**: Ensure sufficient sample sizes
-- **Environment Consistency**: Minimize external factors
-- **Resource Monitoring**: Track CPU, memory, network usage
-- **Baseline Comparison**: Compare against previous results
-
-## Code Style Guidelines
-
-### JavaScript Style
-
-- **ES6+**: Use modern JavaScript features
-- **Async/Await**: Prefer async/await over promises chains
-- **Error Handling**: Always handle errors appropriately
-- **Comments**: Document complex logic and benchmark decisions
-
-### File Organization
-
-```
-framework-benchmark/
-├── scripts/           # Benchmark and utility scripts
-├── data/             # Historical and result data
-├── .github/          # GitHub workflows and templates
-├── {framework}_server.js  # Individual framework servers
-└── README.md         # Auto-generated documentation
+**Response Format:**
+```json
+{
+  "message": "Hello from FrameworkName!",
+  "timestamp": 1234567890
+}
 ```
 
-### Naming Conventions
+## Performance Guidelines
 
-- **Files**: Use `kebab-case` for scripts, `snake_case` for servers
-- **Variables**: Use `camelCase`
-- **Constants**: Use `UPPER_SNAKE_CASE`
-- **Functions**: Use descriptive names with verbs
+### Optimization Principles
 
-### Documentation
+1. **Minimize Overhead:**
+   - Use efficient algorithms
+   - Avoid unnecessary allocations
+   - Cache frequently used data
 
-- **JSDoc**: Document public functions and classes
-- **README Updates**: Ensure README generation captures new features
-- **Inline Comments**: Explain benchmark methodology decisions
+2. **Statistical Accuracy:**
+   - Multiple test runs
+   - Proper warmup periods
+   - Standard deviation calculation
 
-## Testing
+3. **Fair Testing:**
+   - Consistent test conditions
+   - Equivalent server implementations
+   - Same hardware/software environment
 
-### Server Testing
+### Benchmarking Best Practices
 
-```bash
-# Test individual servers
-npm run test:servers
-
-# Test with different runtimes
-node {framework}_server.js
-bun {framework}_server.js
+**Configuration:**
+```cpp
+// Use reasonable defaults
+const BENCHMARK_CONFIG = {
+    connections: 100,      // Realistic load
+    duration: "30s",       // Sufficient duration
+    runs: 3,              // Multiple runs for accuracy
+    warmupTime: 3000,     // Allow server warmup
+    cooldownTime: 2000    // Clean shutdown
+};
 ```
 
-### Benchmark Testing
+**Measurement:**
+- Focus on requests per second as primary metric
+- Include latency percentiles (P50, P90, P99)
+- Monitor for errors and timeouts
+- Track memory usage for long tests
 
-```bash
-# Quick validation
-npm run dev:benchmark
+## Documentation
 
-# Full benchmark suite
-npm run benchmark:full
+### Code Documentation
 
-# Light benchmark for CI
-node scripts/light-benchmark.js
+**C++ Documentation:**
+```cpp
+/**
+ * @brief Runs a complete benchmark suite across all configured frameworks
+ * 
+ * This method orchestrates the entire benchmarking process:
+ * 1. Starts each framework server
+ * 2. Runs WRK load tests
+ * 3. Collects and analyzes results
+ * 4. Generates comprehensive reports
+ * 
+ * @param config Benchmark configuration parameters
+ * @return true if all benchmarks completed successfully
+ * @throws std::runtime_error if critical components fail
+ */
+bool runAllBenchmarks(const BenchmarkConfig& config);
 ```
 
-### Automated Testing
+**README Updates:**
+- Update performance results
+- Document new frameworks
+- Include troubleshooting steps
+- Maintain installation instructions
 
-```bash
-# Lint code
-npm run lint
+## Community
 
-# Run all tests
-npm test
+### Getting Help
 
-# Validate benchmark results
-node scripts/validate-results.js
-```
+- **GitHub Issues**: For bugs and feature requests
+- **GitHub Discussions**: For questions and ideas
+- **PR Reviews**: For code feedback
 
-## Automated Systems
+### Reporting Issues
 
-### GitHub Workflows
-
-1. **Monthly Benchmark** (`.github/workflows/monthly-benchmark.yml`)
-   - Runs on the 1st of each month
-   - Tests all frameworks across Node.js versions
-   - Updates README automatically
-   - Archives historical data
-
-2. **PR Benchmark** (`.github/workflows/pr-benchmark.yml`)
-   - Runs on pull requests affecting servers or benchmarks
-   - Provides performance validation
-   - Comments results on PRs
-
-### README Generation
-
-The README is automatically generated from benchmark results:
-
-```bash
-# Generate README from latest results
-npm run readme:generate
-
-# Custom results file
-node scripts/generate-readme.js custom_results.json
-```
-
-### Historical Data
-
-- **Location**: `data/historical/YYYY/`
-- **Format**: JSON with timestamp and metadata
-- **Retention**: All historical data is preserved
-- **Analysis**: Used for trend analysis and regression detection
-
-## Pull Request Process
-
-### Before Submitting
-
-1. **Test Locally**
-   ```bash
-   npm run dev:benchmark
-   npm run test:servers
-   ```
-
-2. **Validate Changes**
-   ```bash
-   node scripts/validate-benchmark.js
-   ```
-
-3. **Update Documentation**
-   - Update relevant comments
-   - Ensure README generation works
-   - Add any new dependencies
-
-### PR Guidelines
-
-- **Single Responsibility**: One feature/fix per PR
-- **Clear Description**: Explain what and why
-- **Performance Impact**: Document expected performance changes
-- **Backward Compatibility**: Ensure existing benchmarks still work
-
-### PR Template
-
+**Bug Report Template:**
 ```markdown
-## Changes
-- [ ] Added new framework
-- [ ] Improved benchmark methodology
-- [ ] Fixed bug in existing code
-- [ ] Updated documentation
+## Bug Description
+Clear description of the issue
 
-## Framework Details (if applicable)
-- **Name**: 
-- **Version**: 
-- **Type**: (web framework, runtime, etc.)
+## Environment
+- OS: macOS/Ubuntu/Windows
+- Compiler: GCC/Clang version
+- Node.js version:
+- Bun version:
+- WRK version:
 
-## Performance Impact
-- Expected change in benchmark results
-- Reason for performance change
+## Steps to Reproduce
+1. Step 1
+2. Step 2
+3. Step 3
 
-## Testing
-- [ ] Tested locally with `npm run dev:benchmark`
-- [ ] Verified server startup with `npm run test:servers`
-- [ ] Checked README generation works
+## Expected Behavior
+What should happen
+
+## Actual Behavior
+What actually happens
+
+## Additional Context
+Any other relevant information
 ```
 
-### Review Process
+### Performance Issues
 
-1. **Automated Checks**: GitHub Actions will run benchmarks
-2. **Code Review**: Maintainers review implementation
-3. **Performance Review**: Validate benchmark methodology
-4. **Documentation Review**: Ensure proper documentation
+**Performance Report Template:**
+```markdown
+## Performance Issue
+Description of performance degradation
+
+## Benchmark Results
+- Before: X req/sec
+- After: Y req/sec
+- Regression: Z%
+
+## System Information
+- Hardware specs
+- Load conditions
+- Other running processes
+
+## Profiling Data
+Include profiling output if available
+```
 
 ## Release Process
 
-### Version Numbering
+### Version Management
 
-- **Major**: Significant methodology changes or breaking changes
-- **Minor**: New frameworks or features
-- **Patch**: Bug fixes and small improvements
+**Semantic Versioning:**
+- `MAJOR.MINOR.PATCH`
+- Major: Breaking changes
+- Minor: New features
+- Patch: Bug fixes
 
-### Release Checklist
-
-1. **Update Version**: Bump version in `package.json`
-2. **Generate Changelog**: Document all changes
-3. **Run Full Benchmark**: Ensure everything works
-4. **Update README**: Regenerate with latest results
-5. **Tag Release**: Create Git tag with version
-6. **Archive Data**: Ensure historical data is preserved
-
-### Deployment
-
-Releases are automatically deployed through GitHub Actions:
-
-1. **Tag Creation**: Triggers release workflow
-2. **Benchmark Execution**: Runs complete benchmark suite
-3. **Documentation Update**: Updates README and documentation
-4. **Archive Creation**: Creates downloadable release artifacts
-
-## Best Practices
-
-### Performance Testing
-
-- **Consistent Environment**: Use similar hardware and software configurations
-- **Sufficient Duration**: Allow enough time for meaningful results
-- **Multiple Runs**: Average results across multiple iterations
-- **Baseline Comparison**: Always compare against previous versions
-
-### Framework Implementation
-
-- **Minimal Configuration**: Keep server implementations simple and focused
-- **Production Settings**: Use production-optimized configurations
-- **Resource Efficiency**: Avoid memory leaks and resource waste
-- **Standard Responses**: Use consistent response formats
-
-### Documentation
-
-- **Clear Explanations**: Document methodology and reasoning
-- **Reproducible Results**: Provide enough detail for reproduction
-- **Regular Updates**: Keep documentation current with code changes
-- **Performance Context**: Explain what the results mean
-
-## Getting Help
-
-### Resources
-
-- **GitHub Issues**: Report bugs and request features
-- **Discussions**: Ask questions and share ideas
-- **Wiki**: Detailed technical documentation
-- **Examples**: Reference implementations in the repository
-
-### Community
-
-- **Code of Conduct**: Be respectful and constructive
-- **Help Others**: Share knowledge and assist new contributors
-- **Feedback**: Provide thoughtful code reviews
-- **Documentation**: Help improve and maintain documentation
-
-### Contact
-
-- **Issues**: Use GitHub Issues for bugs and feature requests
-- **Security**: Report security issues privately to maintainers
-- **General**: Use GitHub Discussions for questions and ideas
+**Release Steps:**
+1. Update version in package.json
+2. Update CHANGELOG.md
+3. Create release branch
+4. Run full test suite
+5. Create GitHub release
+6. Update documentation
 
 ---
 
-Thank you for contributing to the Framework Benchmark project! Your contributions help the entire JavaScript community make informed decisions about framework performance.
+Thank you for contributing to the Framework Benchmark project! Your contributions help make web framework performance analysis more accurate and accessible to the community.

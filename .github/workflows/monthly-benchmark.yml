@@ -1,4 +1,4 @@
-name: Monthly Framework Benchmark
+name: Monthly Framework Benchmark (C++)
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # Allow manual triggering
     inputs:
       custom_config:
-        description: 'Custom benchmark configuration (JSON)'
+        description: 'Custom benchmark configuration'
         required: false
         default: ''
 
@@ -43,72 +43,119 @@ jobs:
       with:
         bun-version: latest
 
-    - name: 📦 Install Node.js dependencies
+    - name: 🔧 Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libcurl4-openssl-dev pkg-config
+        echo "✅ System dependencies installed"
+
+    - name: ⚡ Install WRK
+      run: |
+        echo "Installing WRK load testing tool..."
+        git clone https://github.com/wg/wrk.git /tmp/wrk
+        cd /tmp/wrk
+        make
+        sudo cp wrk /usr/local/bin/
+        rm -rf /tmp/wrk
+        wrk --version || echo "WRK version info"
+        echo "✅ WRK installed successfully"
+
+    - name: 📦 Install framework dependencies
       run: |
         npm ci
-        npm ls --depth=0
-
-    - name: 🟡 Install Bun dependencies
-      run: |
+        echo "Node.js frameworks installed"
         bun install --frozen-lockfile
-        bun pm ls
+        echo "Bun frameworks installed"
+
+    - name: 🔨 Build C++ benchmark
+      run: |
+        echo "Compiling C++ benchmark orchestrator..."
+        make clean
+        make check-deps
+        make release
+        echo "✅ C++ benchmark compiled successfully"
+        ls -la bin/
 
     - name: 🔍 Verify installations
       run: |
-        echo "Node.js version: $(node --version)"
-        echo "npm version: $(npm --version)"
-        echo "Bun version: $(bun --version)"
-        echo "Available frameworks:"
+        echo "=== Runtime Versions ==="
+        echo "Node.js: $(node --version)"
+        echo "Bun: $(bun --version)"
+        echo "WRK: $(wrk --version 2>&1 | head -1)"
+        echo "GCC: $(gcc --version | head -1)"
+        echo ""
+        echo "=== Framework Files ==="
         ls -la *_server.js
+        echo ""
+        echo "=== C++ Binary ==="
+        ls -la bin/benchmark_wrk
+        file bin/benchmark_wrk
 
     - name: 🧪 Test server startup
       run: |
-        echo "Testing server startup capabilities..."
+        echo "Testing framework server startup..."
+
+        # Test Express
         timeout 10s node express_server.js &
+        EXPRESS_PID=$!
         sleep 3
-        curl -f http://localhost:3000 || echo "Express test failed"
-        pkill -f express_server.js || true
+        curl -f http://localhost:3000 && echo "✅ Express OK" || echo "❌ Express failed"
+        kill $EXPRESS_PID 2>/dev/null || true
         sleep 1
 
+        # Test Fastify
         timeout 10s node fastify_server.js &
+        FASTIFY_PID=$!
         sleep 3
-        curl -f http://localhost:3001 || echo "Fastify test failed"
-        pkill -f fastify_server.js || true
+        curl -f http://localhost:3001 && echo "✅ Fastify OK" || echo "❌ Fastify failed"
+        kill $FASTIFY_PID 2>/dev/null || true
         sleep 1
 
+        # Test Hono
         timeout 10s node hono_server.js &
+        HONO_PID=$!
         sleep 3
-        curl -f http://localhost:3002 || echo "Hono test failed"
-        pkill -f hono_server.js || true
+        curl -f http://localhost:3002 && echo "✅ Hono OK" || echo "❌ Hono failed"
+        kill $HONO_PID 2>/dev/null || true
+        sleep 1
 
-    - name: 🏃‍♂️ Run comprehensive benchmark
+        echo "✅ Server startup tests completed"
+
+    - name: 🏃‍♂️ Run C++ WRK benchmark
       id: benchmark
       run: |
-        echo "Starting comprehensive framework benchmark..."
+        echo "Starting high-performance C++ WRK benchmark..."
         echo "Node.js version: ${{ matrix.node-version }}"
 
-        # Create results directory for this Node version
+        # Create results directory
         mkdir -p "results/node-${{ matrix.node-version }}"
 
-        # Run the enhanced benchmark
-        node scripts/benchmark.js 2>&1 | tee "results/node-${{ matrix.node-version }}/benchmark-output.log"
+        # Set environment
+        export NODE_ENV=production
+
+        # Run the C++ benchmark orchestrator
+        echo "Executing C++ benchmark..."
+        ./bin/benchmark_wrk 2>&1 | tee "results/node-${{ matrix.node-version }}/benchmark-output.log"
 
         # Check if benchmark completed successfully
-        if [ -f "benchmark_results.json" ]; then
-          echo "✅ Benchmark completed successfully"
-          cp benchmark_results.json "results/node-${{ matrix.node-version }}/benchmark_results.json"
+        if [ -f "benchmark_results_wrk.json" ]; then
+          echo "✅ C++ WRK Benchmark completed successfully"
+          cp benchmark_results_wrk.json "results/node-${{ matrix.node-version }}/benchmark_results_wrk.json"
+          cp benchmark_results_wrk.csv "results/node-${{ matrix.node-version }}/benchmark_results_wrk.csv"
 
-          # Extract key metrics for summary
           echo "benchmark_success=true" >> $GITHUB_OUTPUT
 
-          TOP_PERFORMER=$(jq -r '.rankings.byRequestsPerSecond[0].name' benchmark_results.json)
-          TOP_RPS=$(jq -r '.rankings.byRequestsPerSecond[0].value' benchmark_results.json)
+          # Extract top performer from JSON
+          TOP_PERFORMER=$(jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[0].environment' benchmark_results_wrk.json)
+          TOP_RPS=$(jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[0].requestsPerSecond' benchmark_results_wrk.json)
 
           echo "top_performer=${TOP_PERFORMER}" >> $GITHUB_OUTPUT
           echo "top_rps=${TOP_RPS}" >> $GITHUB_OUTPUT
 
+          echo "📊 Top performer: $TOP_PERFORMER with $TOP_RPS req/sec"
+
         else
-          echo "❌ Benchmark failed - no results file generated"
+          echo "❌ C++ benchmark failed - no results file generated"
           echo "benchmark_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
@@ -116,68 +163,159 @@ jobs:
     - name: 📊 Generate performance summary
       if: steps.benchmark.outputs.benchmark_success == 'true'
       run: |
-        echo "## 📊 Benchmark Results Summary (Node.js ${{ matrix.node-version }})" > benchmark-summary.md
+        echo "## 📊 C++ WRK Benchmark Results (Node.js ${{ matrix.node-version }})" > benchmark-summary.md
         echo "" >> benchmark-summary.md
         echo "**🏆 Top Performer:** ${{ steps.benchmark.outputs.top_performer }}" >> benchmark-summary.md
         echo "**📈 Peak Performance:** $(printf "%.2f" ${{ steps.benchmark.outputs.top_rps }}) req/sec" >> benchmark-summary.md
+        echo "**⚡ Benchmark Tool:** WRK (C++)" >> benchmark-summary.md
         echo "" >> benchmark-summary.md
         echo "**📅 Test Date:** $(date -u)" >> benchmark-summary.md
         echo "**🖥️ Environment:** Ubuntu Latest, Node.js ${{ matrix.node-version }}" >> benchmark-summary.md
+        echo "**🔧 Compiler:** $(gcc --version | head -1)" >> benchmark-summary.md
         echo "" >> benchmark-summary.md
 
         # Add top 3 performers
         echo "### 🥇 Top 3 Performers" >> benchmark-summary.md
-        jq -r '.rankings.byRequestsPerSecond[0:3][] | "- **\(.name)**: \(.value | tonumber | . * 100 | round / 100) req/sec"' benchmark_results.json >> benchmark-summary.md
+        jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[0:3][] | "- **\(.environment)**: \(.requestsPerSecond | . * 100 | round / 100) req/sec"' benchmark_results_wrk.json >> benchmark-summary.md
+
+        echo "" >> benchmark-summary.md
+        echo "### 📈 Performance Metrics" >> benchmark-summary.md
+        echo "| Framework | Runtime | RPS | Avg Latency | P90 Latency | P99 Latency | Throughput |" >> benchmark-summary.md
+        echo "|-----------|---------|-----|-------------|-------------|-------------|------------|" >> benchmark-summary.md
+        jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[] | "| \(.framework) | \(.runtime) | \(.requestsPerSecond | . * 100 | round / 100) | \(.avgLatency | . * 100 | round / 100)ms | \(.p90Latency | . * 100 | round / 100)ms | \(.p99Latency | . * 100 | round / 100)ms | \(.throughput / 1024 / 1024 | . * 100 | round / 100)MB/s |"' benchmark_results_wrk.json >> benchmark-summary.md
 
     - name: 📝 Generate updated README
       if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
       run: |
-        echo "Generating updated README with latest benchmark results..."
-        node scripts/generate-readme.js benchmark_results.json README.md
+        echo "Generating updated README with C++ WRK benchmark results..."
 
-        # Verify README was generated
-        if [ -f "README.md" ]; then
-          echo "✅ README generated successfully"
-          echo "📄 README size: $(wc -l < README.md) lines"
-        else
-          echo "❌ README generation failed"
-          exit 1
-        fi
+        # Update README with C++ benchmark results
+        cat > README_TEMP.md << 'EOF'
+# Framework Benchmark (C++ WRK Implementation)
+
+High-performance benchmarking suite using C++ and WRK for comprehensive performance analysis of Express, Fastify, and Hono across Node.js and Bun runtimes.
+
+## 🚀 Latest Benchmark Results
+
+EOF
+
+        cat benchmark-summary.md >> README_TEMP.md
+
+        cat >> README_TEMP.md << 'EOF'
+
+## 🔧 C++ Implementation
+
+This benchmark suite is implemented in C++ for maximum performance and accuracy:
+
+- **WRK Integration**: Uses the industry-standard WRK load testing tool
+- **High Performance**: C++ orchestrator with minimal overhead
+- **Detailed Metrics**: Comprehensive latency percentiles and throughput analysis
+- **Cross-Runtime**: Tests both Node.js and Bun runtime environments
+
+## 🏃‍♂️ Running Benchmarks
+
+### Prerequisites
+
+```bash
+# Install dependencies
+make install-deps
+
+# Verify setup
+make check-deps
+```
+
+### Build and Run
+
+```bash
+# Build the C++ benchmark
+make
+
+# Run the benchmark
+make run
+
+# Or use npm scripts
+npm run benchmark
+```
+
+### Results
+
+Benchmark results are saved to:
+- `benchmark_results_wrk.json` - Detailed JSON results
+- `benchmark_results_wrk.csv` - CSV format for analysis
+
+## 📊 Framework Servers
+
+The benchmark tests these framework configurations:
+
+- **Express** on Node.js and Bun
+- **Fastify** on Node.js and Bun
+- **Hono** on Node.js and Bun
+
+Each server implements a simple JSON API endpoint for consistent testing.
+
+## 🔍 Benchmark Configuration
+
+- **Connections**: 100 concurrent connections
+- **Threads**: 12 worker threads
+- **Duration**: 30 seconds per test
+- **Runs**: 3 runs per configuration (averaged)
+- **Warmup**: 3 seconds server startup time
+- **Cooldown**: 2 seconds between tests
+
+## 📈 Metrics Collected
+
+- **Requests per Second (RPS)**
+- **Average Latency**
+- **Latency Percentiles** (P50, P75, P90, P99)
+- **Throughput** (MB/s)
+- **Error Rates**
+- **Timeout Counts**
+
+EOF
+
+        mv README_TEMP.md README.md
+        echo "✅ README generated successfully"
 
     - name: 🗃️ Archive historical data
       if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
       run: |
-        # Create historical data directory
         mkdir -p data/historical/$(date +%Y)
 
-        # Archive results with timestamp
         TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
-        cp benchmark_results.json "data/historical/$(date +%Y)/benchmark_${TIMESTAMP}.json"
+        cp benchmark_results_wrk.json "data/historical/$(date +%Y)/wrk_benchmark_${TIMESTAMP}.json"
+        cp benchmark_results_wrk.csv "data/historical/$(date +%Y)/wrk_benchmark_${TIMESTAMP}.csv"
 
-        # Create monthly summary
-        echo "# Monthly Benchmark - $(date +%B_%Y)" > "data/historical/$(date +%Y)/summary_$(date +%Y-%m).md"
+        echo "# Monthly C++ WRK Benchmark - $(date +%B_%Y)" > "data/historical/$(date +%Y)/summary_$(date +%Y-%m).md"
         cat benchmark-summary.md >> "data/historical/$(date +%Y)/summary_$(date +%Y-%m).md"
 
-        echo "📁 Historical data archived to data/historical/"
+        echo "📁 Historical C++ benchmark data archived"
 
-    - name: 🔍 Validate changes
+    - name: 🔍 Validate results
       if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
       run: |
-        echo "Validating generated files..."
+        echo "Validating C++ benchmark results..."
 
-        # Check README structure
-        if grep -q "Performance Rankings" README.md && grep -q "Runtime Comparisons" README.md; then
-          echo "✅ README structure validated"
+        # Validate JSON structure
+        if jq empty benchmark_results_wrk.json; then
+          echo "✅ JSON results are valid"
         else
-          echo "❌ README structure validation failed"
+          echo "❌ JSON validation failed"
           exit 1
         fi
 
-        # Check benchmark results
-        if jq empty benchmark_results.json; then
-          echo "✅ Benchmark results JSON is valid"
+        # Check CSV format
+        if [ -f "benchmark_results_wrk.csv" ] && [ $(wc -l < benchmark_results_wrk.csv) -gt 1 ]; then
+          echo "✅ CSV results are valid"
         else
-          echo "❌ Benchmark results JSON is invalid"
+          echo "❌ CSV validation failed"
+          exit 1
+        fi
+
+        # Verify README structure
+        if grep -q "C++ WRK Implementation" README.md; then
+          echo "✅ README structure validated"
+        else
+          echo "❌ README validation failed"
           exit 1
         fi
 
@@ -185,122 +323,86 @@ jobs:
       if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
       run: |
         git config --local user.email "action@github.com"
-        git config --local user.name "Benchmark Bot"
+        git config --local user.name "C++ Benchmark Bot"
 
-        # Add changes
         git add README.md
-        git add benchmark_results.json
+        git add benchmark_results_wrk.json
+        git add benchmark_results_wrk.csv
         git add data/historical/ || true
         git add results/ || true
 
-        # Check if there are changes to commit
         if git diff --staged --quiet; then
           echo "📋 No changes to commit"
         else
-          # Commit changes
-          COMMIT_MSG="🤖 Monthly benchmark update - $(date +%B_%Y)
+          COMMIT_MSG="🚀 Monthly C++ WRK benchmark update - $(date +%B_%Y)
 
 📊 Benchmark Results:
+- Tool: WRK (C++ Implementation)
 - Top Performer: ${{ steps.benchmark.outputs.top_performer }}
 - Peak Performance: $(printf "%.2f" ${{ steps.benchmark.outputs.top_rps }}) req/sec
 - Node.js Version: ${{ matrix.node-version }}
 - Test Date: $(date -u)
 
-🔄 Auto-generated by GitHub Actions"
+🔧 Technical Details:
+- Compiler: $(gcc --version | head -1)
+- WRK Version: $(wrk --version 2>&1 | head -1)
+- Benchmark Duration: 30s per test, 3 runs averaged
+
+🔄 Auto-generated by C++ GitHub Actions workflow"
 
           git commit -m "$COMMIT_MSG"
           git push
-
-          echo "✅ Changes committed and pushed successfully"
+          echo "✅ C++ benchmark results committed and pushed"
         fi
 
-    - name: 📋 Create performance report
+    - name: 📋 Upload benchmark artifacts
       if: steps.benchmark.outputs.benchmark_success == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: benchmark-report-node${{ matrix.node-version }}
+        name: cpp-wrk-benchmark-node${{ matrix.node-version }}
         path: |
-          benchmark_results.json
+          benchmark_results_wrk.json
+          benchmark_results_wrk.csv
           benchmark-summary.md
           results/
+          bin/benchmark_wrk
         retention-days: 90
 
-    - name: 💬 Comment on recent issues (if any)
-      if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require('fs');
-
-          // Read the benchmark summary
-          const summary = fs.readFileSync('benchmark-summary.md', 'utf8');
-
-          // Find recent issues with 'benchmark' label
-          const issues = await github.rest.issues.listForRepo({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            labels: 'benchmark',
-            state: 'open',
-            sort: 'updated',
-            per_page: 5
-          });
-
-          if (issues.data.length > 0) {
-            const comment = `## 🤖 Monthly Benchmark Update
-
-The automated benchmark has completed! Here are the latest results:
-
-${summary}
-
-View the complete results in the [updated README](https://github.com/${context.repo.owner}/${context.repo.repo}#readme).
-
-_This comment was automatically generated by the monthly benchmark workflow._`;
-
-            // Comment on the most recent benchmark-related issue
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issues.data[0].number,
-              body: comment
-            });
-          }
-
-  # Summary job that runs after all matrix jobs complete
   summary:
     runs-on: ubuntu-latest
     needs: benchmark
     if: always()
 
     steps:
-    - name: 📊 Benchmark Summary
+    - name: 📊 C++ Benchmark Summary
       run: |
-        echo "## 🎯 Monthly Benchmark Workflow Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## 🎯 Monthly C++ WRK Benchmark Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**📅 Execution Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
-        echo "**🔄 Workflow:** Monthly Framework Benchmark" >> $GITHUB_STEP_SUMMARY
+        echo "**🔄 Workflow:** C++ WRK Framework Benchmark" >> $GITHUB_STEP_SUMMARY
         echo "**📋 Status:** ${{ needs.benchmark.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "**⚡ Implementation:** High-performance C++ with WRK" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
         if [ "${{ needs.benchmark.result }}" == "success" ]; then
-          echo "✅ **Result:** Benchmark completed successfully across all Node.js versions" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Result:** C++ benchmark completed successfully" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📈 **Next Steps:**" >> $GITHUB_STEP_SUMMARY
-          echo "- README.md has been updated with latest results" >> $GITHUB_STEP_SUMMARY
-          echo "- Historical data archived for trend analysis" >> $GITHUB_STEP_SUMMARY
-          echo "- Benchmark artifacts available for download" >> $GITHUB_STEP_SUMMARY
+          echo "📈 **Deliverables:**" >> $GITHUB_STEP_SUMMARY
+          echo "- High-performance C++ binary executed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- WRK load testing completed across all frameworks" >> $GITHUB_STEP_SUMMARY
+          echo "- README.md updated with comprehensive results" >> $GITHUB_STEP_SUMMARY
+          echo "- JSON and CSV results archived" >> $GITHUB_STEP_SUMMARY
         else
-          echo "❌ **Result:** Benchmark workflow encountered issues" >> $GITHUB_STEP_SUMMARY
+          echo "❌ **Result:** C++ benchmark workflow failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔧 **Recommended Actions:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Check workflow logs for detailed error information" >> $GITHUB_STEP_SUMMARY
-          echo "- Verify framework server implementations" >> $GITHUB_STEP_SUMMARY
-          echo "- Consider running workflow manually for debugging" >> $GITHUB_STEP_SUMMARY
+          echo "🔧 **Debug Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Verify C++ compilation with 'make clean && make'" >> $GITHUB_STEP_SUMMARY
+          echo "- Check WRK installation with 'wrk --version'" >> $GITHUB_STEP_SUMMARY
+          echo "- Test framework servers manually" >> $GITHUB_STEP_SUMMARY
+          echo "- Review build dependencies (gcc, libcurl, etc.)" >> $GITHUB_STEP_SUMMARY
         fi
 
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "📊 **View Results:** [Updated README](https://github.com/${{ github.repository }}#readme)" >> $GITHUB_STEP_SUMMARY
-
-    - name: 🚨 Notify on failure
+    - name: 🚨 Create failure issue
       if: needs.benchmark.result == 'failure'
       uses: actions/github-script@v7
       with:
@@ -308,37 +410,58 @@ _This comment was automatically generated by the monthly benchmark workflow._`;
           const issue = await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: '🚨 Monthly Benchmark Workflow Failed',
-            body: `## 🚨 Monthly Benchmark Failure Report
+            title: '🚨 C++ WRK Benchmark Workflow Failed',
+            body: `## 🚨 C++ WRK Benchmark Failure
 
-The automated monthly benchmark workflow has failed.
+The automated C++ WRK benchmark workflow has failed.
 
 **📅 Failure Date:** ${new Date().toISOString()}
 **🔗 Workflow Run:** https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
 
-### 🔍 Recommended Actions
+### 🔍 Failure Analysis
 
-1. **Check the workflow logs** for detailed error information
-2. **Verify server implementations** are working correctly
-3. **Test framework installations** and dependencies
-4. **Run the benchmark manually** to reproduce the issue
+This workflow uses a high-performance C++ implementation with WRK for benchmarking. Common failure points:
 
-### 🛠️ Quick Debug Commands
+1. **C++ Compilation Issues**
+   - Missing build dependencies (gcc, libcurl-dev)
+   - Compilation errors in benchmark_wrk.cpp
+
+2. **WRK Installation Problems**
+   - WRK build/installation failure
+   - Missing system dependencies
+
+3. **Framework Server Issues**
+   - Server startup failures
+   - Port binding conflicts
+   - Runtime environment problems
+
+### 🛠️ Debug Commands
 
 \`\`\`bash
-# Test individual servers
-npm run express:node
-npm run fastify:node
-npm run hono:node
+# Check build environment
+make check-deps
 
-# Run benchmark manually
-node scripts/benchmark.js
+# Compile C++ benchmark
+make clean && make
+
+# Test WRK installation
+wrk --version
+
+# Test individual servers
+node express_server.js &
+curl http://localhost:3000
+
+# Run C++ benchmark manually
+./bin/benchmark_wrk
 \`\`\`
 
-This issue was automatically created by the benchmark workflow. Please investigate and resolve the underlying cause.
+### 📋 System Requirements
 
-/label bug,benchmark,automation`,
-            labels: ['bug', 'benchmark', 'automation']
+- GCC 7+ with C++17 support
+- libcurl development headers
+- WRK load testing tool
+- Node.js and Bun runtimes
+
+This issue was auto-generated by the C++ benchmark workflow.`,
+            labels: ['bug', 'benchmark', 'cpp', 'automation']
           });
-
-          console.log(`Created issue #${issue.data.number} for benchmark failure`);

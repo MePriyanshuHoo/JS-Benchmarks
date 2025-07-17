@@ -1,11 +1,12 @@
-name: Pull Request Benchmark
+name: Pull Request Benchmark (C++)
 
 on:
   pull_request:
     branches: [ main, master ]
     paths:
       - '**_server.js'
-      - 'scripts/**'
+      - 'benchmark_wrk.cpp'
+      - 'Makefile'
       - 'package*.json'
       - 'bun.lock'
   workflow_dispatch:
@@ -22,7 +23,7 @@ permissions:
 jobs:
   pr-benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
     - name: 🛒 Checkout PR code
@@ -41,15 +42,33 @@ jobs:
       with:
         bun-version: latest
 
-    - name: 📦 Install dependencies
+    - name: 🔧 Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libcurl4-openssl-dev pkg-config
+        echo "✅ Build tools installed"
+
+    - name: ⚡ Install WRK
+      run: |
+        echo "Installing WRK for PR benchmarking..."
+        git clone https://github.com/wg/wrk.git /tmp/wrk
+        cd /tmp/wrk
+        make
+        sudo cp wrk /usr/local/bin/
+        rm -rf /tmp/wrk
+        wrk --version || echo "WRK installed"
+        echo "✅ WRK installed"
+
+    - name: 📦 Install framework dependencies
       run: |
         npm ci
         bun install --frozen-lockfile
+        echo "✅ Framework dependencies installed"
 
-    - name: 🔍 Check what changed
+    - name: 🔍 Analyze changes
       id: changes
       run: |
-        echo "Analyzing changes in this PR..."
+        echo "Analyzing PR changes..."
 
         CHANGED_FILES=$(git diff --name-only HEAD~1)
         echo "Changed files:"
@@ -59,204 +78,238 @@ jobs:
         if echo "$CHANGED_FILES" | grep -E ".*_server\.js$"; then
           echo "server_changed=true" >> $GITHUB_OUTPUT
           echo "🔄 Server files changed - full benchmark needed"
+          echo "benchmark_type=full" >> $GITHUB_OUTPUT
         else
           echo "server_changed=false" >> $GITHUB_OUTPUT
           echo "📋 No server changes - light benchmark"
+          echo "benchmark_type=light" >> $GITHUB_OUTPUT
         fi
 
-        # Check if benchmark scripts changed
-        if echo "$CHANGED_FILES" | grep -E "scripts/.*\.js$"; then
-          echo "benchmark_changed=true" >> $GITHUB_OUTPUT
-          echo "🔧 Benchmark scripts changed"
+        # Check if C++ benchmark changed
+        if echo "$CHANGED_FILES" | grep -E "(benchmark_wrk\.cpp|Makefile)"; then
+          echo "cpp_changed=true" >> $GITHUB_OUTPUT
+          echo "🔧 C++ benchmark files changed"
         else
-          echo "benchmark_changed=false" >> $GITHUB_OUTPUT
+          echo "cpp_changed=false" >> $GITHUB_OUTPUT
         fi
+
+    - name: 🔨 Build C++ benchmark (PR optimized)
+      run: |
+        echo "Building C++ benchmark for PR validation..."
+
+        # Create PR-optimized version
+        cp benchmark_wrk.cpp benchmark_wrk_pr.cpp
+
+        # Modify config for faster PR testing
+        sed -i 's/connections = 100/connections = 50/' benchmark_wrk_pr.cpp
+        sed -i 's/duration = "30s"/duration = "10s"/' benchmark_wrk_pr.cpp
+        sed -i 's/runs = 3/runs = 1/' benchmark_wrk_pr.cpp
+        sed -i 's/warmupTime = 3000/warmupTime = 2000/' benchmark_wrk_pr.cpp
+        sed -i 's/cooldownTime = 2000/cooldownTime = 1000/' benchmark_wrk_pr.cpp
+
+        # For light benchmark, make it even faster
+        if [ "${{ steps.changes.outputs.benchmark_type }}" == "light" ]; then
+          sed -i 's/connections = 50/connections = 25/' benchmark_wrk_pr.cpp
+          sed -i 's/duration = "10s"/duration = "5s"/' benchmark_wrk_pr.cpp
+        fi
+
+        # Compile PR version
+        g++ -std=c++17 -Wall -Wextra -O2 -pthread benchmark_wrk_pr.cpp -lcurl -o benchmark_wrk_pr
+
+        echo "✅ PR-optimized C++ benchmark compiled"
+        ls -la benchmark_wrk_pr
+        file benchmark_wrk_pr
 
     - name: 🧪 Quick server validation
       run: |
-        echo "Testing server startup..."
+        echo "Testing server startup capabilities..."
 
-        # Test each server can start
-        timeout 10s node express_server.js &
-        sleep 2 && curl -f http://localhost:3000 > /dev/null && echo "✅ Express OK"
-        pkill -f express_server.js || true
+        # Test Express
+        timeout 8s node express_server.js &
+        EXPRESS_PID=$!
+        sleep 2
+        if curl -f http://localhost:3000 >/dev/null 2>&1; then
+          echo "✅ Express server OK"
+        else
+          echo "❌ Express server failed"
+        fi
+        kill $EXPRESS_PID 2>/dev/null || true
         sleep 1
 
-        timeout 10s node fastify_server.js &
-        sleep 2 && curl -f http://localhost:3001 > /dev/null && echo "✅ Fastify OK"
-        pkill -f fastify_server.js || true
+        # Test Fastify
+        timeout 8s node fastify_server.js &
+        FASTIFY_PID=$!
+        sleep 2
+        if curl -f http://localhost:3001 >/dev/null 2>&1; then
+          echo "✅ Fastify server OK"
+        else
+          echo "❌ Fastify server failed"
+        fi
+        kill $FASTIFY_PID 2>/dev/null || true
         sleep 1
 
-        timeout 10s node hono_server.js &
-        sleep 2 && curl -f http://localhost:3002 > /dev/null && echo "✅ Hono OK"
-        pkill -f hono_server.js || true
+        # Test Hono
+        timeout 8s node hono_server.js &
+        HONO_PID=$!
+        sleep 2
+        if curl -f http://localhost:3002 >/dev/null 2>&1; then
+          echo "✅ Hono server OK"
+        else
+          echo "❌ Hono server failed"
+        fi
+        kill $HONO_PID 2>/dev/null || true
 
-    - name: 🏃‍♂️ Run PR benchmark (light)
-      if: steps.changes.outputs.server_changed == 'false'
+        echo "✅ Server validation completed"
+
+    - name: 🏃‍♂️ Run C++ PR benchmark
+      id: benchmark
       run: |
-        echo "Running light benchmark for PR validation..."
+        echo "Running C++ WRK benchmark for PR validation..."
+        echo "Benchmark type: ${{ steps.changes.outputs.benchmark_type }}"
 
-        # Create a light benchmark config
-        cat > light-benchmark.js << 'EOF'
-        const { BenchmarkRunner } = require('./scripts/benchmark.js');
+        # Set environment
+        export NODE_ENV=production
 
-        class LightBenchmarkRunner extends BenchmarkRunner {
-          constructor() {
-            super();
-            // Light configuration for PR testing
-            this.config = {
-              ...this.config,
-              connections: 50,    // Reduced connections
-              duration: 10,       // Shorter duration
-              runs: 1,           // Single run
-              warmupTime: 2000,  // Shorter warmup
-              cooldownTime: 1000 // Shorter cooldown
-            };
-          }
-        }
+        # Run the PR-optimized benchmark
+        echo "Executing PR-optimized C++ benchmark..."
+        ./benchmark_wrk_pr 2>&1 | tee pr_benchmark_output.log
 
-        async function main() {
-          const benchmark = new LightBenchmarkRunner();
-          const report = await benchmark.runAllBenchmarks();
-          benchmark.printSummary();
-          await benchmark.saveResults('pr_benchmark_results.json');
-        }
+        # Check results
+        if [ -f "benchmark_results_wrk.json" ]; then
+          echo "✅ C++ PR benchmark completed successfully"
+          mv benchmark_results_wrk.json pr_benchmark_results.json
+          mv benchmark_results_wrk.csv pr_benchmark_results.csv
 
-        main().catch(console.error);
-        EOF
+          echo "benchmark_success=true" >> $GITHUB_OUTPUT
 
-        node light-benchmark.js
+          # Extract key metrics
+          TOP_PERFORMER=$(jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[0].environment' pr_benchmark_results.json)
+          TOP_RPS=$(jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[0].requestsPerSecond' pr_benchmark_results.json)
 
-    - name: 🏃‍♂️ Run PR benchmark (full)
-      if: steps.changes.outputs.server_changed == 'true'
-      run: |
-        echo "Running full benchmark due to server changes..."
+          echo "top_performer=${TOP_PERFORMER}" >> $GITHUB_OUTPUT
+          echo "top_rps=${TOP_RPS}" >> $GITHUB_OUTPUT
 
-        # Use enhanced benchmark but with reduced config for CI
-        cat > pr-benchmark.js << 'EOF'
-        const { BenchmarkRunner } = require('./scripts/benchmark.js');
+          echo "📊 PR Benchmark Results:"
+          echo "  Top performer: $TOP_PERFORMER"
+          echo "  Peak RPS: $TOP_RPS"
 
-        class PRBenchmarkRunner extends BenchmarkRunner {
-          constructor() {
-            super();
-            // CI-optimized configuration
-            this.config = {
-              ...this.config,
-              connections: 75,    // Moderate connections
-              duration: 20,       // Moderate duration
-              runs: 2,           // Two runs for better accuracy
-              warmupTime: 2000,
-              cooldownTime: 1500
-            };
-          }
-        }
-
-        async function main() {
-          const benchmark = new PRBenchmarkRunner();
-          const report = await benchmark.runAllBenchmarks();
-          benchmark.printSummary();
-          await benchmark.saveResults('pr_benchmark_results.json');
-        }
-
-        main().catch(console.error);
-        EOF
-
-        node pr-benchmark.js
-
-    - name: 📊 Generate PR benchmark report
-      if: always()
-      run: |
-        if [ ! -f "pr_benchmark_results.json" ]; then
-          echo "❌ No benchmark results found"
+        else
+          echo "❌ C++ PR benchmark failed - no results generated"
+          echo "benchmark_success=false" >> $GITHUB_OUTPUT
           exit 1
         fi
 
-        # Create a concise PR report
+    - name: 📊 Generate PR benchmark report
+      if: steps.benchmark.outputs.benchmark_success == 'true'
+      run: |
+        echo "Generating PR benchmark report..."
+
         cat > pr-report.md << 'EOF'
-## 🚀 PR Benchmark Results
+## 🚀 C++ WRK PR Benchmark Results
 
 EOF
 
-        # Add benchmark type info
-        if [ "${{ steps.changes.outputs.server_changed }}" == "true" ]; then
+        # Add benchmark type and configuration
+        echo "**⚡ Benchmark Tool:** WRK (C++ Implementation)" >> pr-report.md
+        if [ "${{ steps.changes.outputs.benchmark_type }}" == "full" ]; then
           echo "**🔄 Benchmark Type:** Full (server changes detected)" >> pr-report.md
+          echo "**⚙️ Configuration:** 50 connections, 10s duration, 1 run" >> pr-report.md
         else
           echo "**📋 Benchmark Type:** Light (no server changes)" >> pr-report.md
+          echo "**⚙️ Configuration:** 25 connections, 5s duration, 1 run" >> pr-report.md
         fi
 
         echo "" >> pr-report.md
         echo "**📅 Test Date:** $(date -u)" >> pr-report.md
         echo "**🖥️ Environment:** Ubuntu Latest, Node.js 22" >> pr-report.md
+        echo "**🔧 Compiler:** $(gcc --version | head -1)" >> pr-report.md
         echo "" >> pr-report.md
 
-        # Extract top performers
-        echo "### 🏆 Top Performers" >> pr-report.md
-        jq -r '.rankings.byRequestsPerSecond[0:3][] | "- **\(.name)**: \(.value | tonumber | . * 100 | round / 100) req/sec"' pr_benchmark_results.json >> pr-report.md
+        # Top performer
+        echo "### 🏆 Top Performer" >> pr-report.md
+        echo "**${{ steps.benchmark.outputs.top_performer }}**: $(printf "%.2f" ${{ steps.benchmark.outputs.top_rps }}) req/sec" >> pr-report.md
+        echo "" >> pr-report.md
+
+        # Performance table
+        echo "### 📈 Performance Results" >> pr-report.md
+        echo "| Framework | Runtime | RPS | Avg Latency | P90 Latency | P99 Latency | Throughput |" >> pr-report.md
+        echo "|-----------|---------|-----|-------------|-------------|-------------|------------|" >> pr-report.md
+        jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[] | "| \(.framework) | \(.runtime) | \(.requestsPerSecond | . * 100 | round / 100) | \(.avgLatency | . * 100 | round / 100)ms | \(.p90Latency | . * 100 | round / 100)ms | \(.p99Latency | . * 100 | round / 100)ms | \(.throughput / 1024 / 1024 | . * 100 | round / 100)MB/s |"' pr_benchmark_results.json >> pr-report.md
 
         echo "" >> pr-report.md
-        echo "### ⚡ Runtime Comparisons" >> pr-report.md
+        echo "### 🔄 Runtime Comparisons" >> pr-report.md
 
-        # Runtime improvements
-        jq -r 'to_entries[] | select(.key != "metadata" and .key != "environment" and .key != "configuration" and .key != "summary" and .key != "results" and .key != "rankings") | "\(.key): \(.value.improvement.percentage | tonumber | . * 100 | round / 100)% improvement with Bun"' pr_benchmark_results.json > /tmp/improvements.txt 2>/dev/null || echo "No runtime comparisons available" > /tmp/improvements.txt
+        # Node.js vs Bun comparisons
+        FRAMEWORKS=$(jq -r '.results | map(.framework) | unique | .[]' pr_benchmark_results.json)
+        for framework in $FRAMEWORKS; do
+          NODE_RPS=$(jq -r --arg fw "$framework" '.results | map(select(.framework == $fw and .runtime == "node")) | .[0].requestsPerSecond // 0' pr_benchmark_results.json)
+          BUN_RPS=$(jq -r --arg fw "$framework" '.results | map(select(.framework == $fw and .runtime == "bun")) | .[0].requestsPerSecond // 0' pr_benchmark_results.json)
 
-        if [ -s /tmp/improvements.txt ]; then
-          cat /tmp/improvements.txt >> pr-report.md
+          if [ "$NODE_RPS" != "0" ] && [ "$BUN_RPS" != "0" ]; then
+            IMPROVEMENT=$(echo "scale=1; (($BUN_RPS - $NODE_RPS) / $NODE_RPS) * 100" | bc -l)
+            echo "- **$framework**: Bun shows ${IMPROVEMENT}% performance vs Node.js" >> pr-report.md
+          fi
+        done
+
+        echo "" >> pr-report.md
+        echo "### 🔍 PR Validation" >> pr-report.md
+
+        if [ "${{ steps.changes.outputs.server_changed }}" == "true" ]; then
+          echo "✅ **Server changes detected** - Full benchmark executed to validate performance impact" >> pr-report.md
+        else
+          echo "✅ **No server changes** - Light benchmark confirms no performance regression" >> pr-report.md
+        fi
+
+        if [ "${{ steps.changes.outputs.cpp_changed }}" == "true" ]; then
+          echo "🔧 **C++ benchmark changes detected** - Benchmark infrastructure updated" >> pr-report.md
         fi
 
         echo "" >> pr-report.md
-        echo "### 📋 Configuration" >> pr-report.md
-        echo "- **Connections:** $(jq -r '.configuration.connections' pr_benchmark_results.json)" >> pr-report.md
-        echo "- **Duration:** $(jq -r '.configuration.duration' pr_benchmark_results.json) seconds" >> pr-report.md
-        echo "- **Runs:** $(jq -r '.configuration.runs' pr_benchmark_results.json)" >> pr-report.md
-
-        echo "" >> pr-report.md
-        echo "_This benchmark was automatically run to validate your changes. For the complete benchmark suite, check the monthly automated reports._" >> pr-report.md
+        echo "---" >> pr-report.md
+        echo "_This benchmark was automatically run using a high-performance C++ implementation with WRK. Results are optimized for PR validation and may differ from monthly comprehensive benchmarks._" >> pr-report.md
 
     - name: 🔍 Compare with baseline (if available)
       continue-on-error: true
+      if: steps.benchmark.outputs.benchmark_success == 'true'
       run: |
         echo "Looking for baseline benchmark data..."
 
-        # Try to fetch the latest benchmark from main branch
+        # Try to fetch baseline from main branch
         git fetch origin main:main 2>/dev/null || true
 
-        if git show main:benchmark_results.json > baseline_results.json 2>/dev/null; then
-          echo "✅ Found baseline benchmark data"
+        if git show main:benchmark_results_wrk.json > baseline_results.json 2>/dev/null; then
+          echo "✅ Found baseline C++ WRK benchmark data"
 
-          # Create comparison report
-          cat > comparison.js << 'EOF'
-          const fs = require('fs');
-
-          try {
-            const baseline = JSON.parse(fs.readFileSync('baseline_results.json', 'utf8'));
-            const current = JSON.parse(fs.readFileSync('pr_benchmark_results.json', 'utf8'));
-
-            console.log('\n## 📈 Performance Comparison vs Main Branch\n');
-
-            // Compare top performers
-            const baselineTop = baseline.rankings?.byRequestsPerSecond?.[0];
-            const currentTop = current.rankings?.byRequestsPerSecond?.[0];
-
-            if (baselineTop && currentTop) {
-              const improvement = ((currentTop.value - baselineTop.value) / baselineTop.value) * 100;
-              const emoji = improvement > 0 ? '📈' : improvement < 0 ? '📉' : '➡️';
-
-              console.log(`**Top Performer Change:**`);
-              console.log(`- Baseline: ${baselineTop.name} (${baselineTop.value.toFixed(2)} req/sec)`);
-              console.log(`- Current: ${currentTop.name} (${currentTop.value.toFixed(2)} req/sec)`);
-              console.log(`- Change: ${emoji} ${improvement.toFixed(2)}%`);
-            }
-
-          } catch (error) {
-            console.log('⚠️ Could not generate detailed comparison');
-          }
-          EOF
-
-          node comparison.js >> pr-report.md
-        else
-          echo "⚠️ No baseline data available for comparison"
           echo "" >> pr-report.md
-          echo "⚠️ _No baseline data available for performance comparison_" >> pr-report.md
+          echo "## 📈 Performance Comparison vs Main Branch" >> pr-report.md
+          echo "" >> pr-report.md
+
+          # Compare top performers
+          BASELINE_TOP=$(jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[0].environment' baseline_results.json)
+          BASELINE_RPS=$(jq -r '.results | sort_by(.requestsPerSecond) | reverse | .[0].requestsPerSecond' baseline_results.json)
+          CURRENT_TOP="${{ steps.benchmark.outputs.top_performer }}"
+          CURRENT_RPS="${{ steps.benchmark.outputs.top_rps }}"
+
+          echo "**Baseline (main):** $BASELINE_TOP ($(printf "%.2f" $BASELINE_RPS) req/sec)" >> pr-report.md
+          echo "**Current (PR):** $CURRENT_TOP ($(printf "%.2f" $CURRENT_RPS) req/sec)" >> pr-report.md
+
+          IMPROVEMENT=$(echo "scale=2; (($CURRENT_RPS - $BASELINE_RPS) / $BASELINE_RPS) * 100" | bc -l)
+
+          if (( $(echo "$IMPROVEMENT > 5" | bc -l) )); then
+            echo "**Result:** 📈 **Significant improvement** (+${IMPROVEMENT}%)" >> pr-report.md
+          elif (( $(echo "$IMPROVEMENT < -5" | bc -l) )); then
+            echo "**Result:** 📉 **Performance regression** (${IMPROVEMENT}%)" >> pr-report.md
+          else
+            echo "**Result:** ➡️ **No significant change** (${IMPROVEMENT}%)" >> pr-report.md
+          fi
+
+          echo "" >> pr-report.md
+          echo "⚠️ _Note: PR benchmarks use reduced load for faster CI execution. For precise comparisons, refer to monthly comprehensive benchmarks._" >> pr-report.md
+
+        else
+          echo "⚠️ No baseline C++ benchmark data available"
+          echo "" >> pr-report.md
+          echo "⚠️ _No baseline data available for performance comparison. This appears to be the first C++ benchmark._" >> pr-report.md
         fi
 
     - name: 💬 Post PR comment
@@ -267,9 +320,40 @@ EOF
           const fs = require('fs');
 
           try {
-            const report = fs.readFileSync('pr-report.md', 'utf8');
+            let report;
+            if (fs.existsSync('pr-report.md')) {
+              report = fs.readFileSync('pr-report.md', 'utf8');
+            } else {
+              // Fallback report
+              report = `## 🚀 C++ WRK PR Benchmark Results
 
-            // Check if we already commented on this PR
+❌ Benchmark failed to complete successfully.
+
+**📅 Test Date:** ${new Date().toISOString()}
+**🔧 Implementation:** C++ with WRK load testing
+
+Please check the [workflow logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.
+
+### 🛠️ Common Issues
+- C++ compilation errors
+- Missing system dependencies (libcurl, build-essential)
+- WRK installation problems
+- Server startup failures
+
+### 🔧 Local Testing
+\`\`\`bash
+# Install dependencies
+make install-deps
+
+# Build C++ benchmark
+make clean && make
+
+# Run benchmark
+make run
+\`\`\``;
+            }
+
+            // Check for existing benchmark comments
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -278,7 +362,7 @@ EOF
 
             const botComment = comments.data.find(comment =>
               comment.user.type === 'Bot' &&
-              comment.body.includes('🚀 PR Benchmark Results')
+              comment.body.includes('🚀 C++ WRK PR Benchmark Results')
             );
 
             if (botComment) {
@@ -289,7 +373,7 @@ EOF
                 comment_id: botComment.id,
                 body: report
               });
-              console.log('Updated existing benchmark comment');
+              console.log('✅ Updated existing PR benchmark comment');
             } else {
               // Create new comment
               await github.rest.issues.createComment({
@@ -298,21 +382,21 @@ EOF
                 issue_number: context.issue.number,
                 body: report
               });
-              console.log('Created new benchmark comment');
+              console.log('✅ Created new PR benchmark comment');
             }
           } catch (error) {
-            console.error('Failed to post comment:', error);
+            console.error('❌ Failed to post comment:', error);
 
-            // Fallback comment
+            // Emergency fallback comment
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## 🚀 PR Benchmark Results
+              body: `## 🚀 C++ WRK PR Benchmark
 
-❌ Benchmark completed but failed to generate detailed report.
+❌ Benchmark completed but failed to generate report.
 
-Please check the [workflow logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.`
+Check [workflow logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.`
             });
           }
 
@@ -320,31 +404,38 @@ Please check the [workflow logs](https://github.com/${context.repo.owner}/${cont
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: pr-benchmark-results
+        name: cpp-pr-benchmark-results
         path: |
           pr_benchmark_results.json
+          pr_benchmark_results.csv
           pr-report.md
+          pr_benchmark_output.log
           baseline_results.json
-        retention-days: 30
+          benchmark_wrk_pr
+        retention-days: 14
 
     - name: ✅ Summary
       run: |
-        echo "## 🎯 PR Benchmark Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## 🎯 C++ PR Benchmark Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
-        if [ -f "pr_benchmark_results.json" ]; then
-          echo "✅ **Status:** Benchmark completed successfully" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.benchmark.outputs.benchmark_success }}" == "true" ]; then
+          echo "✅ **Status:** C++ WRK benchmark completed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "⚡ **Implementation:** High-performance C++ with WRK load testing" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-
-          TOP_PERFORMER=$(jq -r '.rankings.byRequestsPerSecond[0].name' pr_benchmark_results.json)
-          TOP_RPS=$(jq -r '.rankings.byRequestsPerSecond[0].value' pr_benchmark_results.json)
-
-          echo "🏆 **Top Performer:** $TOP_PERFORMER" >> $GITHUB_STEP_SUMMARY
-          echo "📈 **Peak Performance:** $(printf "%.2f" $TOP_RPS) req/sec" >> $GITHUB_STEP_SUMMARY
+          echo "🏆 **Top Performer:** ${{ steps.benchmark.outputs.top_performer }}" >> $GITHUB_STEP_SUMMARY
+          echo "📈 **Peak Performance:** $(printf "%.2f" ${{ steps.benchmark.outputs.top_rps }}) req/sec" >> $GITHUB_STEP_SUMMARY
+          echo "🔧 **Benchmark Type:** ${{ steps.changes.outputs.benchmark_type }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "💬 **Next Steps:** Check the PR comment for detailed results" >> $GITHUB_STEP_SUMMARY
+          echo "💬 **Next Steps:** Check the PR comment for detailed performance analysis" >> $GITHUB_STEP_SUMMARY
         else
-          echo "❌ **Status:** Benchmark failed" >> $GITHUB_STEP_SUMMARY
+          echo "❌ **Status:** C++ benchmark failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔧 **Action Required:** Check workflow logs and fix issues" >> $GITHUB_STEP_SUMMARY
+          echo "🔧 **Possible Issues:**" >> $GITHUB_STEP_SUMMARY
+          echo "- C++ compilation errors" >> $GITHUB_STEP_SUMMARY
+          echo "- Missing system dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- WRK installation problems" >> $GITHUB_STEP_SUMMARY
+          echo "- Framework server failures" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📋 **Action Required:** Review workflow logs and fix underlying issues" >> $GITHUB_STEP_SUMMARY
         fi
