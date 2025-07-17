@@ -14,6 +14,7 @@
 #include <cmath>
 #include <iomanip>
 #include <algorithm>
+#include <array>
 #include <curl/curl.h>
 
 struct BenchmarkConfig {
