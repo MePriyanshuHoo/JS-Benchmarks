@@ -216,11 +216,22 @@ jobs:
 
           # Create a test version with very short duration
           cp benchmark_wrk.cpp benchmark_test.cpp
-          sed -i '' 's/duration = "30s"/duration = "2s"/' benchmark_test.cpp
-          sed -i '' 's/connections = 100/connections = 10/' benchmark_test.cpp
-          sed -i '' 's/runs = 3/runs = 1/' benchmark_test.cpp
-          sed -i '' 's/warmupTime = 3000/warmupTime = 1000/' benchmark_test.cpp
-          sed -i '' 's/cooldownTime = 2000/cooldownTime = 500/' benchmark_test.cpp
+          # Cross-platform sed commands
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS
+            sed -i '' 's/duration = "30s"/duration = "2s"/' benchmark_test.cpp
+            sed -i '' 's/connections = 100/connections = 10/' benchmark_test.cpp
+            sed -i '' 's/runs = 3/runs = 1/' benchmark_test.cpp
+            sed -i '' 's/warmupTime = 3000/warmupTime = 1000/' benchmark_test.cpp
+            sed -i '' 's/cooldownTime = 2000/cooldownTime = 500/' benchmark_test.cpp
+          else
+            # Linux
+            sed -i 's/duration = "30s"/duration = "2s"/' benchmark_test.cpp
+            sed -i 's/connections = 100/connections = 10/' benchmark_test.cpp
+            sed -i 's/runs = 3/runs = 1/' benchmark_test.cpp
+            sed -i 's/warmupTime = 3000/warmupTime = 1000/' benchmark_test.cpp
+            sed -i 's/cooldownTime = 2000/cooldownTime = 500/' benchmark_test.cpp
+          fi
 
           # Compile test version
           g++ -std=c++17 -Wall -Wextra -O2 -pthread benchmark_test.cpp -lcurl -o benchmark_test
