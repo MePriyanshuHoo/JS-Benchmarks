@@ -1,0 +1,37 @@
+{
+  "name": "framework-benchmark",
+  "version": "2.0.0",
+  "description": "Automated benchmark suite with comprehensive performance analysis for Express, Fastify, and Hono across Node.js and Bun runtimes",
+  "main": "index.js",
+  "scripts": {
+    "express:node": "node express_server.js",
+    "express:bun": "bun express_server.js",
+    "fastify:node": "node fastify_server.js",
+    "fastify:bun": "bun fastify_server.js",
+    "hono:node": "node hono_server.js",
+    "hono:bun": "bun hono_server.js",
+    "benchmark": "node benchmark_comprehensive.js",
+    "benchmark:full": "node scripts/benchmark.js",
+    "benchmark:express": "node benchmark_express.js",
+    "readme:generate": "node scripts/generate-readme.js",
+    "benchmark:update": "npm run benchmark:full && npm run readme:generate",
+    "setup": "node scripts/setup.js",
+    "setup:quick": "node scripts/setup.js --skip-validation",
+    "setup:no-bun": "node scripts/setup.js --skip-bun",
+    "validate": "node scripts/validate-setup.js",
+    "validate:quick": "node scripts/validate-setup.js --quick",
+    "install:bun": "bun install",
+    "test:servers": "node scripts/test-servers.js",
+    "clean": "rm -f benchmark_results.json && rm -rf results/",
+    "dev:benchmark": "npm run clean && npm run benchmark:update"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "fastify": "^4.25.2",
+    "hono": "^4.0.0",
+    "@hono/node-server": "^1.4.1"
+  },
+  "devDependencies": {
+    "autocannon": "^7.15.0"
+  }
+}

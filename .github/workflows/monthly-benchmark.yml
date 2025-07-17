@@ -1,0 +1,344 @@
+name: Monthly Framework Benchmark
+
+on:
+  schedule:
+    # Run on the 1st of every month at 02:00 UTC
+    - cron: '0 2 1 * *'
+  workflow_dispatch: # Allow manual triggering
+    inputs:
+      custom_config:
+        description: 'Custom benchmark configuration (JSON)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      matrix:
+        node-version: [20, 22]
+      fail-fast: false
+
+    steps:
+    - name: 🛒 Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 📋 Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+
+    - name: 🟡 Setup Bun
+      uses: oven-sh/setup-bun@v1
+      with:
+        bun-version: latest
+
+    - name: 📦 Install Node.js dependencies
+      run: |
+        npm ci
+        npm ls --depth=0
+
+    - name: 🟡 Install Bun dependencies
+      run: |
+        bun install --frozen-lockfile
+        bun pm ls
+
+    - name: 🔍 Verify installations
+      run: |
+        echo "Node.js version: $(node --version)"
+        echo "npm version: $(npm --version)"
+        echo "Bun version: $(bun --version)"
+        echo "Available frameworks:"
+        ls -la *_server.js
+
+    - name: 🧪 Test server startup
+      run: |
+        echo "Testing server startup capabilities..."
+        timeout 10s node express_server.js &
+        sleep 3
+        curl -f http://localhost:3000 || echo "Express test failed"
+        pkill -f express_server.js || true
+        sleep 1
+
+        timeout 10s node fastify_server.js &
+        sleep 3
+        curl -f http://localhost:3001 || echo "Fastify test failed"
+        pkill -f fastify_server.js || true
+        sleep 1
+
+        timeout 10s node hono_server.js &
+        sleep 3
+        curl -f http://localhost:3002 || echo "Hono test failed"
+        pkill -f hono_server.js || true
+
+    - name: 🏃‍♂️ Run comprehensive benchmark
+      id: benchmark
+      run: |
+        echo "Starting comprehensive framework benchmark..."
+        echo "Node.js version: ${{ matrix.node-version }}"
+
+        # Create results directory for this Node version
+        mkdir -p "results/node-${{ matrix.node-version }}"
+
+        # Run the enhanced benchmark
+        node scripts/benchmark.js 2>&1 | tee "results/node-${{ matrix.node-version }}/benchmark-output.log"
+
+        # Check if benchmark completed successfully
+        if [ -f "benchmark_results.json" ]; then
+          echo "✅ Benchmark completed successfully"
+          cp benchmark_results.json "results/node-${{ matrix.node-version }}/benchmark_results.json"
+
+          # Extract key metrics for summary
+          echo "benchmark_success=true" >> $GITHUB_OUTPUT
+
+          TOP_PERFORMER=$(jq -r '.rankings.byRequestsPerSecond[0].name' benchmark_results.json)
+          TOP_RPS=$(jq -r '.rankings.byRequestsPerSecond[0].value' benchmark_results.json)
+
+          echo "top_performer=${TOP_PERFORMER}" >> $GITHUB_OUTPUT
+          echo "top_rps=${TOP_RPS}" >> $GITHUB_OUTPUT
+
+        else
+          echo "❌ Benchmark failed - no results file generated"
+          echo "benchmark_success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: 📊 Generate performance summary
+      if: steps.benchmark.outputs.benchmark_success == 'true'
+      run: |
+        echo "## 📊 Benchmark Results Summary (Node.js ${{ matrix.node-version }})" > benchmark-summary.md
+        echo "" >> benchmark-summary.md
+        echo "**🏆 Top Performer:** ${{ steps.benchmark.outputs.top_performer }}" >> benchmark-summary.md
+        echo "**📈 Peak Performance:** $(printf "%.2f" ${{ steps.benchmark.outputs.top_rps }}) req/sec" >> benchmark-summary.md
+        echo "" >> benchmark-summary.md
+        echo "**📅 Test Date:** $(date -u)" >> benchmark-summary.md
+        echo "**🖥️ Environment:** Ubuntu Latest, Node.js ${{ matrix.node-version }}" >> benchmark-summary.md
+        echo "" >> benchmark-summary.md
+
+        # Add top 3 performers
+        echo "### 🥇 Top 3 Performers" >> benchmark-summary.md
+        jq -r '.rankings.byRequestsPerSecond[0:3][] | "- **\(.name)**: \(.value | tonumber | . * 100 | round / 100) req/sec"' benchmark_results.json >> benchmark-summary.md
+
+    - name: 📝 Generate updated README
+      if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
+      run: |
+        echo "Generating updated README with latest benchmark results..."
+        node scripts/generate-readme.js benchmark_results.json README.md
+
+        # Verify README was generated
+        if [ -f "README.md" ]; then
+          echo "✅ README generated successfully"
+          echo "📄 README size: $(wc -l < README.md) lines"
+        else
+          echo "❌ README generation failed"
+          exit 1
+        fi
+
+    - name: 🗃️ Archive historical data
+      if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
+      run: |
+        # Create historical data directory
+        mkdir -p data/historical/$(date +%Y)
+
+        # Archive results with timestamp
+        TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+        cp benchmark_results.json "data/historical/$(date +%Y)/benchmark_${TIMESTAMP}.json"
+
+        # Create monthly summary
+        echo "# Monthly Benchmark - $(date +%B_%Y)" > "data/historical/$(date +%Y)/summary_$(date +%Y-%m).md"
+        cat benchmark-summary.md >> "data/historical/$(date +%Y)/summary_$(date +%Y-%m).md"
+
+        echo "📁 Historical data archived to data/historical/"
+
+    - name: 🔍 Validate changes
+      if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
+      run: |
+        echo "Validating generated files..."
+
+        # Check README structure
+        if grep -q "Performance Rankings" README.md && grep -q "Runtime Comparisons" README.md; then
+          echo "✅ README structure validated"
+        else
+          echo "❌ README structure validation failed"
+          exit 1
+        fi
+
+        # Check benchmark results
+        if jq empty benchmark_results.json; then
+          echo "✅ Benchmark results JSON is valid"
+        else
+          echo "❌ Benchmark results JSON is invalid"
+          exit 1
+        fi
+
+    - name: 📤 Commit and push changes
+      if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "Benchmark Bot"
+
+        # Add changes
+        git add README.md
+        git add benchmark_results.json
+        git add data/historical/ || true
+        git add results/ || true
+
+        # Check if there are changes to commit
+        if git diff --staged --quiet; then
+          echo "📋 No changes to commit"
+        else
+          # Commit changes
+          COMMIT_MSG="🤖 Monthly benchmark update - $(date +%B_%Y)
+
+📊 Benchmark Results:
+- Top Performer: ${{ steps.benchmark.outputs.top_performer }}
+- Peak Performance: $(printf "%.2f" ${{ steps.benchmark.outputs.top_rps }}) req/sec
+- Node.js Version: ${{ matrix.node-version }}
+- Test Date: $(date -u)
+
+🔄 Auto-generated by GitHub Actions"
+
+          git commit -m "$COMMIT_MSG"
+          git push
+
+          echo "✅ Changes committed and pushed successfully"
+        fi
+
+    - name: 📋 Create performance report
+      if: steps.benchmark.outputs.benchmark_success == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-report-node${{ matrix.node-version }}
+        path: |
+          benchmark_results.json
+          benchmark-summary.md
+          results/
+        retention-days: 90
+
+    - name: 💬 Comment on recent issues (if any)
+      if: steps.benchmark.outputs.benchmark_success == 'true' && matrix.node-version == 22
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+
+          // Read the benchmark summary
+          const summary = fs.readFileSync('benchmark-summary.md', 'utf8');
+
+          // Find recent issues with 'benchmark' label
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: 'benchmark',
+            state: 'open',
+            sort: 'updated',
+            per_page: 5
+          });
+
+          if (issues.data.length > 0) {
+            const comment = `## 🤖 Monthly Benchmark Update
+
+The automated benchmark has completed! Here are the latest results:
+
+${summary}
+
+View the complete results in the [updated README](https://github.com/${context.repo.owner}/${context.repo.repo}#readme).
+
+_This comment was automatically generated by the monthly benchmark workflow._`;
+
+            // Comment on the most recent benchmark-related issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issues.data[0].number,
+              body: comment
+            });
+          }
+
+  # Summary job that runs after all matrix jobs complete
+  summary:
+    runs-on: ubuntu-latest
+    needs: benchmark
+    if: always()
+
+    steps:
+    - name: 📊 Benchmark Summary
+      run: |
+        echo "## 🎯 Monthly Benchmark Workflow Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**📅 Execution Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+        echo "**🔄 Workflow:** Monthly Framework Benchmark" >> $GITHUB_STEP_SUMMARY
+        echo "**📋 Status:** ${{ needs.benchmark.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ "${{ needs.benchmark.result }}" == "success" ]; then
+          echo "✅ **Result:** Benchmark completed successfully across all Node.js versions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📈 **Next Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "- README.md has been updated with latest results" >> $GITHUB_STEP_SUMMARY
+          echo "- Historical data archived for trend analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- Benchmark artifacts available for download" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Result:** Benchmark workflow encountered issues" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔧 **Recommended Actions:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Check workflow logs for detailed error information" >> $GITHUB_STEP_SUMMARY
+          echo "- Verify framework server implementations" >> $GITHUB_STEP_SUMMARY
+          echo "- Consider running workflow manually for debugging" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📊 **View Results:** [Updated README](https://github.com/${{ github.repository }}#readme)" >> $GITHUB_STEP_SUMMARY
+
+    - name: 🚨 Notify on failure
+      if: needs.benchmark.result == 'failure'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const issue = await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: '🚨 Monthly Benchmark Workflow Failed',
+            body: `## 🚨 Monthly Benchmark Failure Report
+
+The automated monthly benchmark workflow has failed.
+
+**📅 Failure Date:** ${new Date().toISOString()}
+**🔗 Workflow Run:** https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+
+### 🔍 Recommended Actions
+
+1. **Check the workflow logs** for detailed error information
+2. **Verify server implementations** are working correctly
+3. **Test framework installations** and dependencies
+4. **Run the benchmark manually** to reproduce the issue
+
+### 🛠️ Quick Debug Commands
+
+\`\`\`bash
+# Test individual servers
+npm run express:node
+npm run fastify:node
+npm run hono:node
+
+# Run benchmark manually
+node scripts/benchmark.js
+\`\`\`
+
+This issue was automatically created by the benchmark workflow. Please investigate and resolve the underlying cause.
+
+/label bug,benchmark,automation`,
+            labels: ['bug', 'benchmark', 'automation']
+          });
+
+          console.log(`Created issue #${issue.data.number} for benchmark failure`);
